@@ -19,7 +19,7 @@ const CUBE_FACE_ROTATIONS = {
 const SPLAT_BASE_PATH = '/splats/';
 
 // WASD + QE camera controls
-function WASDControls({ speed = 0.05 }) {
+function WASDControls({ speed = 0.05, controlsRef }) {
   const { camera } = useThree();
   const keys = useRef({});
   
@@ -84,6 +84,10 @@ function WASDControls({ speed = 0.05 }) {
     
     if (moved) {
       camera.position.add(moveVector);
+      // Also move the OrbitControls target so we strafe instead of orbit
+      if (controlsRef?.current) {
+        controlsRef.current.target.add(moveVector);
+      }
     }
   });
   
@@ -104,6 +108,7 @@ function SplatViewer() {
   const [enabledFaces, setEnabledFaces] = useState({});
   const [loading, setLoading] = useState(true);
   const [splatScale, setSplatScale] = useState(1.0);
+  const controlsRef = useRef();
 
   useEffect(() => {
     // Check which splat files are available
@@ -201,8 +206,9 @@ function SplatViewer() {
           ))}
         </Suspense>
         
-        <WASDControls speed={0.05} />
+        <WASDControls speed={0.05} controlsRef={controlsRef} />
         <OrbitControls 
+          ref={controlsRef}
           enableDamping 
           dampingFactor={0.05}
           minDistance={0.1}
