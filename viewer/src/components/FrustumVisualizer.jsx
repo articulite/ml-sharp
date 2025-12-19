@@ -53,29 +53,28 @@ function FrustumVisualizer({ direction = 'front', depth = 2.0, visible = true })
   }, [depth]);
   
   // Rotation to orient the frustum based on face direction
-  // These match where gaussians ACTUALLY end up after CUBE_FACE_ROTATIONS transforms
-  // The base frustum points toward -Z, so we rotate it to point where splats are
+  // The base frustum points toward -Z, rotate to match frustum directions
   const rotation = useMemo(() => {
     switch (direction) {
-      // Cubemap faces - rotations to point frustum where splats actually are
-      case 'front':  return [0, Math.PI, 0];              // Splats at +Z, rotate 180° around Y
-      case 'back':   return [0, 0, 0];                    // Splats at -Z, no rotation needed
-      case 'left':   return [0, Math.PI / 2, 0];          // Splats at -X, rotate 90° around Y
-      case 'right':  return [0, -Math.PI / 2, 0];         // Splats at +X, rotate -90° around Y
-      case 'top':    return [-Math.PI / 2, 0, 0];         // Splats at -Y, rotate -90° around X
-      case 'bottom': return [Math.PI / 2, 0, 0];          // Splats at +Y, rotate 90° around X
+      // Cubemap faces
+      case 'front':  return [0, 0, 0];                    // Frustum at -Z, no rotation
+      case 'back':   return [0, Math.PI, 0];              // Frustum at +Z, rotate 180° around Y
+      case 'left':   return [0, Math.PI / 2, 0];          // Frustum at -X, rotate 90° around Y
+      case 'right':  return [0, -Math.PI / 2, 0];         // Frustum at +X, rotate -90° around Y
+      case 'top':    return [Math.PI / 2, 0, 0];          // Frustum at +Y, rotate 90° around X
+      case 'bottom': return [-Math.PI / 2, 0, 0];         // Frustum at -Y, rotate -90° around X
       
       // Cylinder 8 faces (compass directions)
-      case 'n':  return [0, Math.PI, 0];                  // 0° - same as front
-      case 'ne': return [0, 3 * Math.PI / 4, 0];          // 45°
-      case 'e':  return [0, -Math.PI / 2, 0];             // 90° - same as right
-      case 'se': return [0, -Math.PI / 4, 0];             // 135°
-      case 's':  return [0, 0, 0];                        // 180° - same as back
-      case 'sw': return [0, Math.PI / 4, 0];              // 225°
-      case 'w':  return [0, Math.PI / 2, 0];              // 270° - same as left
-      case 'nw': return [0, -3 * Math.PI / 4, 0];         // 315°
+      case 'n':  return [0, 0, 0];                        // Same as front
+      case 'ne': return [0, -Math.PI / 4, 0];             // 45°
+      case 'e':  return [0, -Math.PI / 2, 0];             // Same as right
+      case 'se': return [0, -3 * Math.PI / 4, 0];         // 135°
+      case 's':  return [0, Math.PI, 0];                  // Same as back
+      case 'sw': return [0, 3 * Math.PI / 4, 0];          // 225°
+      case 'w':  return [0, Math.PI / 2, 0];              // Same as left
+      case 'nw': return [0, Math.PI / 4, 0];              // 315°
       
-      default:   return [0, Math.PI, 0];
+      default:   return [0, 0, 0];
     }
   }, [direction]);
   
@@ -123,24 +122,24 @@ function FrustumWireframe({ direction = 'front', depth = 2.0, visible = true }) 
   const rotation = useMemo(() => {
     switch (direction) {
       // Cubemap faces - match FrustumVisualizer rotations
-      case 'front':  return [0, Math.PI, 0];              // Splats at +Z
-      case 'back':   return [0, 0, 0];                    // Splats at -Z
-      case 'left':   return [0, Math.PI / 2, 0];          // Splats at -X
-      case 'right':  return [0, -Math.PI / 2, 0];         // Splats at +X
-      case 'top':    return [-Math.PI / 2, 0, 0];         // Splats at -Y
-      case 'bottom': return [Math.PI / 2, 0, 0];          // Splats at +Y
+      case 'front':  return [0, 0, 0];                    // Frustum at -Z
+      case 'back':   return [0, Math.PI, 0];              // Frustum at +Z
+      case 'left':   return [0, Math.PI / 2, 0];          // Frustum at -X
+      case 'right':  return [0, -Math.PI / 2, 0];         // Frustum at +X
+      case 'top':    return [Math.PI / 2, 0, 0];          // Frustum at +Y
+      case 'bottom': return [-Math.PI / 2, 0, 0];         // Frustum at -Y
       
       // Cylinder 8 faces (compass directions)
-      case 'n':  return [0, Math.PI, 0];
-      case 'ne': return [0, 3 * Math.PI / 4, 0];
+      case 'n':  return [0, 0, 0];
+      case 'ne': return [0, -Math.PI / 4, 0];
       case 'e':  return [0, -Math.PI / 2, 0];
-      case 'se': return [0, -Math.PI / 4, 0];
-      case 's':  return [0, 0, 0];
-      case 'sw': return [0, Math.PI / 4, 0];
+      case 'se': return [0, -3 * Math.PI / 4, 0];
+      case 's':  return [0, Math.PI, 0];
+      case 'sw': return [0, 3 * Math.PI / 4, 0];
       case 'w':  return [0, Math.PI / 2, 0];
-      case 'nw': return [0, -3 * Math.PI / 4, 0];
+      case 'nw': return [0, Math.PI / 4, 0];
       
-      default:   return [0, Math.PI, 0];
+      default:   return [0, 0, 0];
     }
   }, [direction]);
   

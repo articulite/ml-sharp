@@ -276,36 +276,30 @@ const fragmentShader = `
 
 // Get frustum direction based on face
 // Directions must match where gaussians ACTUALLY end up after CUBE_FACE_ROTATIONS transforms
-// Calculated by transforming (0,0,-1) through each face's rotation matrix
+// Empirically determined: left/right needed flipping, others kept original
 function getFrustumDirection(face) {
   const SQRT2_2 = Math.SQRT2 / 2;  // ~0.707
   
   switch (face) {
-    // Cubemap faces - directions where splats actually end up after rotation
-    // front [π,0,0]: (0,0,-1) → (0,0,+1)
-    case 'front':  return new THREE.Vector3(0, 0, 1);
-    // back [π,π,0]: (0,0,-1) → (0,0,-1)
-    case 'back':   return new THREE.Vector3(0, 0, -1);
-    // left [π,-π/2,0]: (0,0,-1) → (-1,0,0)
-    case 'left':   return new THREE.Vector3(-1, 0, 0);
-    // right [π,π/2,0]: (0,0,-1) → (+1,0,0)
-    case 'right':  return new THREE.Vector3(1, 0, 0);
-    // top [-π/2,0,0]: (0,0,-1) → (0,-1,0)
-    case 'top':    return new THREE.Vector3(0, -1, 0);
-    // bottom [π/2,0,0]: (0,0,-1) → (0,+1,0)
-    case 'bottom': return new THREE.Vector3(0, 1, 0);
+    // Cubemap faces
+    case 'front':  return new THREE.Vector3(0, 0, -1);
+    case 'back':   return new THREE.Vector3(0, 0, 1);
+    case 'left':   return new THREE.Vector3(-1, 0, 0);  // Flipped from original (+1)
+    case 'right':  return new THREE.Vector3(1, 0, 0);   // Flipped from original (-1)
+    case 'top':    return new THREE.Vector3(0, 1, 0);
+    case 'bottom': return new THREE.Vector3(0, -1, 0);
     
-    // Cylinder 8 faces (compass directions) - also corrected
-    case 'n':  return new THREE.Vector3(0, 0, 1);             // 0° - same as front
-    case 'ne': return new THREE.Vector3(SQRT2_2, 0, SQRT2_2);    // 45°
-    case 'e':  return new THREE.Vector3(1, 0, 0);             // 90° - same as right
-    case 'se': return new THREE.Vector3(SQRT2_2, 0, -SQRT2_2);   // 135°
-    case 's':  return new THREE.Vector3(0, 0, -1);            // 180° - same as back
-    case 'sw': return new THREE.Vector3(-SQRT2_2, 0, -SQRT2_2);  // 225°
-    case 'w':  return new THREE.Vector3(-1, 0, 0);            // 270° - same as left
-    case 'nw': return new THREE.Vector3(-SQRT2_2, 0, SQRT2_2);   // 315°
+    // Cylinder 8 faces (compass directions)
+    case 'n':  return new THREE.Vector3(0, 0, -1);            // Same as front
+    case 'ne': return new THREE.Vector3(SQRT2_2, 0, -SQRT2_2);   // 45° (flipped X)
+    case 'e':  return new THREE.Vector3(1, 0, 0);             // Same as right (flipped)
+    case 'se': return new THREE.Vector3(SQRT2_2, 0, SQRT2_2);    // 135° (flipped X)
+    case 's':  return new THREE.Vector3(0, 0, 1);             // Same as back
+    case 'sw': return new THREE.Vector3(-SQRT2_2, 0, SQRT2_2);   // 225° (flipped X)
+    case 'w':  return new THREE.Vector3(-1, 0, 0);            // Same as left (flipped)
+    case 'nw': return new THREE.Vector3(-SQRT2_2, 0, -SQRT2_2);  // 315° (flipped X)
     
-    default:   return new THREE.Vector3(0, 0, 1);
+    default:   return new THREE.Vector3(0, 0, -1);
   }
 }
 
