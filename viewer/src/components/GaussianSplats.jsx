@@ -45,20 +45,34 @@ const vertexShader = `
     );
   }
   
-  // Check if point is inside 90-degree pyramidal frustum
+  // Check if point is inside 90-degree square pyramidal frustum
   bool isInsideFrustum(vec3 worldPos) {
-    // For 90° FOV, the frustum is a pyramid where at any point along the axis,
-    // the distance from axis equals the depth along axis
+    // Depth along frustum direction
     float depth = dot(worldPos, frustumDir);
     if (depth <= 0.0) return false;  // Behind the apex
     
     // Project point onto plane perpendicular to frustum direction
     vec3 projOnAxis = depth * frustumDir;
     vec3 perpComponent = worldPos - projOnAxis;
-    float distFromAxis = length(perpComponent);
     
-    // For 90° FOV (45° half-angle), tan(45°) = 1, so max distance = depth
-    return distFromAxis <= depth * tan(frustumAngle);
+    // For a SQUARE pyramid, check each perpendicular axis separately
+    // Max allowed distance along each axis = depth * tan(halfAngle)
+    float maxDist = depth * tan(frustumAngle);
+    
+    // Get the two perpendicular axes based on frustum direction
+    // For axis-aligned frustums, we check the other two world axes
+    vec3 absDir = abs(frustumDir);
+    
+    if (absDir.z > 0.5) {
+      // Frustum along Z axis - check X and Y
+      return abs(perpComponent.x) <= maxDist && abs(perpComponent.y) <= maxDist;
+    } else if (absDir.x > 0.5) {
+      // Frustum along X axis - check Y and Z
+      return abs(perpComponent.y) <= maxDist && abs(perpComponent.z) <= maxDist;
+    } else {
+      // Frustum along Y axis - check X and Z
+      return abs(perpComponent.x) <= maxDist && abs(perpComponent.z) <= maxDist;
+    }
   }
   
   void main() {
@@ -183,16 +197,24 @@ const fragmentShader = `
   uniform vec3 frustumDir;
   uniform float frustumAngle;
   
-  // Check if point is inside 90-degree pyramidal frustum
+  // Check if point is inside 90-degree square pyramidal frustum
   bool isInsideFrustum(vec3 worldPos) {
     float depth = dot(worldPos, frustumDir);
     if (depth <= 0.0) return false;
     
     vec3 projOnAxis = depth * frustumDir;
     vec3 perpComponent = worldPos - projOnAxis;
-    float distFromAxis = length(perpComponent);
+    float maxDist = depth * tan(frustumAngle);
     
-    return distFromAxis <= depth * tan(frustumAngle);
+    vec3 absDir = abs(frustumDir);
+    
+    if (absDir.z > 0.5) {
+      return abs(perpComponent.x) <= maxDist && abs(perpComponent.y) <= maxDist;
+    } else if (absDir.x > 0.5) {
+      return abs(perpComponent.y) <= maxDist && abs(perpComponent.z) <= maxDist;
+    } else {
+      return abs(perpComponent.x) <= maxDist && abs(perpComponent.z) <= maxDist;
+    }
   }
   
   void main() {
@@ -230,13 +252,13 @@ function getFrustumDirection(face) {
   }
 }
 
-// CPU pre-filter: check if a point is inside the pyramidal frustum
+// CPU pre-filter: check if a point is inside the square pyramidal frustum
 function isInsideFrustumCPU(x, y, z, frustumDir, halfAngle) {
   // Depth along frustum direction
   const depth = x * frustumDir.x + y * frustumDir.y + z * frustumDir.z;
   if (depth <= 0) return false; // Behind apex
   
-  // Perpendicular distance from frustum axis
+  // Perpendicular component from frustum axis
   const projX = depth * frustumDir.x;
   const projY = depth * frustumDir.y;
   const projZ = depth * frustumDir.z;
@@ -245,10 +267,23 @@ function isInsideFrustumCPU(x, y, z, frustumDir, halfAngle) {
   const perpY = y - projY;
   const perpZ = z - projZ;
   
-  const distFromAxis = Math.sqrt(perpX * perpX + perpY * perpY + perpZ * perpZ);
+  // For a SQUARE pyramid, check each perpendicular axis separately
+  const maxDist = depth * Math.tan(halfAngle);
   
-  // For 90° FOV, tan(45°) = 1, so max distance = depth
-  return distFromAxis <= depth * Math.tan(halfAngle);
+  const absDirX = Math.abs(frustumDir.x);
+  const absDirY = Math.abs(frustumDir.y);
+  const absDirZ = Math.abs(frustumDir.z);
+  
+  if (absDirZ > 0.5) {
+    // Frustum along Z axis - check X and Y
+    return Math.abs(perpX) <= maxDist && Math.abs(perpY) <= maxDist;
+  } else if (absDirX > 0.5) {
+    // Frustum along X axis - check Y and Z
+    return Math.abs(perpY) <= maxDist && Math.abs(perpZ) <= maxDist;
+  } else {
+    // Frustum along Y axis - check X and Z
+    return Math.abs(perpX) <= maxDist && Math.abs(perpZ) <= maxDist;
+  }
 }
 
 // Apply CPU frustum culling to splat data
