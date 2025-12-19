@@ -4,6 +4,7 @@ import { Suspense, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import GaussianSplatCloud from './components/GaussianSplats';
 import { FrustumVisualizer, FrustumWireframe } from './components/FrustumVisualizer';
+import GenerateDashboard from './components/GenerateDashboard';
 import './App.css';
 
 // Cube face orientations (Euler angles in radians)
@@ -112,7 +113,7 @@ function LoadingIndicator() {
   );
 }
 
-function SplatViewer() {
+function SplatViewer({ refreshTrigger }) {
   const [availableFaces, setAvailableFaces] = useState([]);
   const [enabledFaces, setEnabledFaces] = useState({});
   const [loading, setLoading] = useState(true);
@@ -123,40 +124,47 @@ function SplatViewer() {
   const [panelOpen, setPanelOpen] = useState(true);
   const controlsRef = useRef();
 
-  useEffect(() => {
-    // Check which splat files are available
-    const checkFaces = async () => {
-      const faces = ['front', 'back', 'left', 'right', 'top', 'bottom'];
-      const available = [];
-      const enabled = {};
+  const checkFaces = async () => {
+    const faces = ['front', 'back', 'left', 'right', 'top', 'bottom'];
+    const available = [];
+    const enabled = {};
 
-      for (const face of faces) {
-        try {
-          const response = await fetch(`${SPLAT_BASE_PATH}input_${face}.ply`, { method: 'HEAD' });
-          if (response.ok) {
-            available.push(face);
-            // Default: only enable 'front' face on initial load
-            enabled[face] = (face === 'front');
-          }
-        } catch {
-          // File not available
+    for (const face of faces) {
+      try {
+        const response = await fetch(`${SPLAT_BASE_PATH}input_${face}.ply`, { method: 'HEAD' });
+        if (response.ok) {
+          available.push(face);
+          // Default: only enable 'front' face on initial load
+          enabled[face] = (face === 'front');
         }
+      } catch {
+        // File not available
       }
+    }
 
-      setAvailableFaces(available);
-      setEnabledFaces(enabled);
-      setLoading(false);
-    };
+    setAvailableFaces(available);
+    setEnabledFaces(enabled);
+    setLoading(false);
+  };
 
+  useEffect(() => {
     checkFaces();
   }, []);
+
+  // Re-check faces when refreshTrigger changes (after generation)
+  useEffect(() => {
+    if (refreshTrigger > 0) {
+      setLoading(true);
+      checkFaces();
+    }
+  }, [refreshTrigger]);
 
   const toggleFace = (face) => {
     setEnabledFaces(prev => ({ ...prev, [face]: !prev[face] }));
   };
 
   // Key includes cullMode so components reinitialize when culling mode changes
-  const splatKey = (face) => `${face}-cull-${cullMode}`;
+  const splatKey = (face) => `${face}-cull-${cullMode}-${refreshTrigger}`;
 
   if (loading) {
     return (
@@ -305,12 +313,48 @@ function SplatViewer() {
 }
 
 function App() {
+  const [activeTab, setActiveTab] = useState('generate');
+  const [splatRefreshTrigger, setSplatRefreshTrigger] = useState(0);
+
+  const handleSplatsGenerated = () => {
+    // Trigger refresh of the viewer when new splats are generated
+    setSplatRefreshTrigger(prev => prev + 1);
+  };
+
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Gaussian Splat Viewer</h1>
+        <h1>Sharp Viewer</h1>
+        <nav className="app-tabs">
+          <button 
+            className={`tab-btn ${activeTab === 'generate' ? 'active' : ''}`}
+            onClick={() => setActiveTab('generate')}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            Generate
+          </button>
+          <button 
+            className={`tab-btn ${activeTab === 'viewer' ? 'active' : ''}`}
+            onClick={() => setActiveTab('viewer')}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M2 12s4-8 10-8 10 8 10 8-4 8-10 8-10-8-10-8z" />
+            </svg>
+            Viewer
+          </button>
+        </nav>
       </header>
-      <SplatViewer />
+      <main className="app-main">
+        {activeTab === 'generate' && (
+          <GenerateDashboard onSplatsGenerated={handleSplatsGenerated} />
+        )}
+        {activeTab === 'viewer' && (
+          <SplatViewer refreshTrigger={splatRefreshTrigger} />
+        )}
+      </main>
     </div>
   );
 }

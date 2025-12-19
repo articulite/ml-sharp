@@ -1,0 +1,17 @@
+[project]
+name = "sharp-viewer-server"
+version = "0.1.0"
+description = "Backend server for Sharp Viewer Dashboard"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "python-multipart>=0.0.6",
+    "websockets>=12.0",
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+]
+
+[tool.uv]
+dev-dependencies = []
+

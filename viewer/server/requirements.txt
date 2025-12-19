@@ -1,0 +1,12 @@
+# Backend server dependencies (additional to main sharp requirements)
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+websockets>=12.0
+
+# Note: This server imports from 'sharp' which requires torch, imageio, etc.
+# Run from the main project root where sharp is installed:
+#   cd c:\gitprojects\ml-sharp
+#   uv pip install fastapi uvicorn python-multipart websockets
+#   uv run python -m uvicorn viewer.server.main:app --reload --port 8765
+
