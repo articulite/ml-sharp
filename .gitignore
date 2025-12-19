@@ -173,3 +173,11 @@ data/input.jpg
 
 # Keep teaser.jpg (it's in the repo for README)
 !data/teaser.jpg
+
+# Node / React / Vite
+node_modules/
+viewer/node_modules/
+viewer/dist/
+viewer/public/splats/
+*.local
+.vite/
