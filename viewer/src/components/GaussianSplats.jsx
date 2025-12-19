@@ -122,18 +122,23 @@ const vertexShader = `
     // Build 3D covariance in view space
     // Cov = M * diag(s^2) * M^T where M = ViewRot * GaussianRot
     mat3 R;
+    vec3 s = splatScale * splatScaleMult;
+    
     if (orientMode == 1) {
       // Orient gaussian to face toward origin (0,0,0)
       R = lookAtRotationToward(splatCenter, vec3(0.0));
     } else if (orientMode == 2) {
       // Billboard: orient gaussian to face the camera
+      // Use the two largest scales to make a flat disc, ensures no stretching from any angle
       R = lookAtRotationToward(splatCenter, cameraWorldPos);
+      float maxScale = max(s.x, max(s.y, s.z));
+      float midScale = s.x + s.y + s.z - maxScale - min(s.x, min(s.y, s.z));
+      s = vec3(maxScale, midScale, 0.001);  // Flat disc with 2 largest scales
     } else {
       // Use stored rotation from PLY
       R = quatToMat3(splatRotation);
     }
     mat3 M = mat3(modelViewMatrix) * R;
-    vec3 s = splatScale * splatScaleMult;
     
     // Scaled axes: each column of M scaled by corresponding scale
     vec3 a0 = M[0] * s.x;
