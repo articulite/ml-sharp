@@ -73,6 +73,25 @@ DEFAULT_MODEL_URL = "https://ml-site.cdn-apple.com/models/sharp/sharp_2572gikvuh
     help="Device to run on. ['cpu', 'mps', 'cuda']",
 )
 @click.option("-v", "--verbose", is_flag=True, help="Activate debug logs.")
+@click.option(
+    "--fov",
+    type=float,
+    default=None,
+    help="Override field of view in degrees (e.g., 110 for wide-angle cube faces).",
+)
+@click.option(
+    "--focal-length",
+    "focal_length_px",
+    type=float,
+    default=None,
+    help="Override focal length in pixels. Takes precedence over --fov if both provided.",
+)
+@click.option(
+    "--faces",
+    type=str,
+    default=None,
+    help="Filter images by face name (e.g., 'front,left,right'). Only processes files containing these names.",
+)
 def predict_cli(
     input_path: Path,
     output_path: Path,
@@ -80,6 +99,9 @@ def predict_cli(
     with_rendering: bool,
     device: str,
     verbose: bool,
+    fov: float | None,
+    focal_length_px: float | None,
+    faces: str | None,
 ):
     """Predict Gaussians from input images."""
     logging_utils.configure(logging.DEBUG if verbose else logging.INFO)
@@ -93,6 +115,15 @@ def predict_cli(
     else:
         for ext in extensions:
             image_paths.extend(list(input_path.glob(f"**/*{ext}")))
+
+    # Filter by face names if specified
+    if faces is not None:
+        face_list = [f.strip().lower() for f in faces.split(",")]
+        image_paths = [
+            p for p in image_paths
+            if any(face in p.stem.lower() for face in face_list)
+        ]
+        LOGGER.info("Filtering for faces: %s", face_list)
 
     if len(image_paths) == 0:
         LOGGER.info("No valid images found. Input was %s.", input_path)
@@ -130,8 +161,22 @@ def predict_cli(
 
     for image_path in image_paths:
         LOGGER.info("Processing %s", image_path)
-        image, _, f_px = io.load_rgb(image_path)
+        image, _, f_px_from_exif = io.load_rgb(image_path)
         height, width = image.shape[:2]
+
+        # Determine focal length: CLI override > EXIF
+        if focal_length_px is not None:
+            f_px = focal_length_px
+            LOGGER.info("Using provided focal length: %.2f px", f_px)
+        elif fov is not None:
+            # Compute focal length from FOV: f = (size/2) / tan(fov/2)
+            # Use the smaller dimension for square/non-square images
+            size = min(width, height)
+            f_px = size / (2 * np.tan(np.deg2rad(fov) / 2))
+            LOGGER.info("Using FOV %.1f° -> focal length: %.2f px", fov, f_px)
+        else:
+            f_px = f_px_from_exif
+
         intrinsics = torch.tensor(
             [
                 [f_px, 0, (width - 1) / 2.0, 0],

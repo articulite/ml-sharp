@@ -164,3 +164,12 @@ cython_debug/
 .DS_STORE
 *.pt
 .aider*
+
+# Project-specific
+data/cubefaces/
+data/splats/
+data/input.jpg
+*.ply
+
+# Keep teaser.jpg (it's in the repo for README)
+!data/teaser.jpg
