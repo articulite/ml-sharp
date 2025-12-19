@@ -2,23 +2,16 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { Suspense, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import GaussianSplatCloud, { MergedGaussianSplats } from './components/GaussianSplats';
+import GaussianSplatCloud, { MergedGaussianSplats, PIPELINE_TYPES, getFaceList, getFaceRotations } from './components/GaussianSplats';
 import { FrustumVisualizer, FrustumWireframe } from './components/FrustumVisualizer';
 import GenerateDashboard from './components/GenerateDashboard';
 import './App.css';
 
-// Cube face orientations (Euler angles in radians)
-// Base 180° X rotation is baked in to correct coordinate system
-const CUBE_FACE_ROTATIONS = {
-  front:  [Math.PI, 0, 0],
-  back:   [Math.PI, Math.PI, 0],
-  left:   [Math.PI, -Math.PI / 2, 0],  // Swapped with right
-  right:  [Math.PI, Math.PI / 2, 0],   // Swapped with left
-  top:    [-Math.PI / 2, 0, 0],
-  bottom: [Math.PI / 2, 0, 0],
-};
+// Get face rotations from shared definitions
+const CUBE_FACE_ROTATIONS = getFaceRotations('cubemap_6');
 
 const DEFAULT_SPLAT_PATH = '/splats/';
+const DEFAULT_PIPELINE_TYPE = 'cubemap_6';
 
 // Culling mode descriptions
 const CULL_MODES = [
@@ -184,7 +177,7 @@ function LoadingIndicator() {
   );
 }
 
-function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
+function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipelineType = DEFAULT_PIPELINE_TYPE }) {
   const [availableFaces, setAvailableFaces] = useState([]);
   const [enabledFaces, setEnabledFaces] = useState({});
   const [loading, setLoading] = useState(true);
@@ -198,20 +191,28 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
   const [orientMode, setOrientMode] = useState(2);  // 0=stored, 1=to center, 2=billboard (camera-facing)
   const [useMergedSplats, setUseMergedSplats] = useState(true);  // Use merged by default for correct depth
   const [viewFov, setViewFov] = useState(100);  // Narrower FOV for more zoom
+  const [faceDistance, setFaceDistance] = useState(0);  // Distance to push faces outward from center
   const controlsRef = useRef();
 
-  const checkFaces = async (basePath) => {
-    const faces = ['front', 'back', 'left', 'right', 'top', 'bottom'];
+  // Get the face list for the current pipeline type
+  const expectedFaces = getFaceList(pipelineType);
+  const faceRotations = getFaceRotations(pipelineType);
+
+  const checkFaces = async (basePath, faceList) => {
     const available = [];
     const enabled = {};
 
-    for (const face of faces) {
+    for (const face of faceList) {
       try {
         const response = await fetch(`${basePath}input_${face}.ply`, { method: 'HEAD' });
         if (response.ok) {
           available.push(face);
-          // Default: enable all faces except top and bottom
-          enabled[face] = (face !== 'top' && face !== 'bottom');
+          // Default: enable all faces except top and bottom (for cubemap only)
+          if (pipelineType === 'cubemap_6') {
+            enabled[face] = (face !== 'top' && face !== 'bottom');
+          } else {
+            enabled[face] = true;
+          }
         }
       } catch {
         // File not available
@@ -224,16 +225,16 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
   };
 
   useEffect(() => {
-    checkFaces(splatBasePath);
-  }, []);
+    checkFaces(splatBasePath, expectedFaces);
+  }, [pipelineType]);
 
-  // Re-check faces when refreshTrigger or splatBasePath changes
+  // Re-check faces when refreshTrigger, splatBasePath, or pipelineType changes
   useEffect(() => {
     if (refreshTrigger > 0) {
       setLoading(true);
-      checkFaces(splatBasePath);
+      checkFaces(splatBasePath, expectedFaces);
     }
-  }, [refreshTrigger, splatBasePath]);
+  }, [refreshTrigger, splatBasePath, pipelineType]);
 
   const toggleFace = (face) => {
     setEnabledFaces(prev => ({ ...prev, [face]: !prev[face] }));
@@ -260,7 +261,10 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
         
         {panelOpen && (
           <>
-            <h2>Cube Faces</h2>
+            <h2>{pipelineType === 'cylinder_8' ? 'Cylinder Faces' : 'Cube Faces'}</h2>
+            <p className="pipeline-type-label">
+              {pipelineType === 'cylinder_8' ? '8-face cylinder' : '6-face cubemap'}
+            </p>
             <div className="face-toggles">
               {availableFaces.map(face => (
                 <label key={face} className="face-toggle">
@@ -269,12 +273,12 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
                     checked={enabledFaces[face] || false}
                     onChange={() => toggleFace(face)}
                   />
-                  <span className="toggle-label">{face}</span>
+                  <span className="toggle-label">{face.toUpperCase()}</span>
                 </label>
               ))}
             </div>
             {availableFaces.length === 0 && (
-              <p className="no-faces-message">No splat files found in /splats/</p>
+              <p className="no-faces-message">No splat files found</p>
             )}
             
             <div className="scale-slider">
@@ -304,6 +308,23 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
                 />
               </label>
             </div>
+
+            {pipelineType === 'cylinder_8' && (
+              <div className="face-distance-slider">
+                <label>
+                  <span>Face Distance: {faceDistance.toFixed(2)}</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.05"
+                    value={faceDistance}
+                    onChange={(e) => setFaceDistance(parseFloat(e.target.value))}
+                  />
+                </label>
+                <p className="slider-hint">Push faces outward from center</p>
+              </div>
+            )}
 
             <h2>Orientation</h2>
             <div className="orient-mode-selector">
@@ -418,11 +439,14 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
           {useMergedSplats ? (
             // Single merged mesh with all faces - correct depth sorting
             <MergedGaussianSplats
-              key={`merged-${refreshTrigger}-${splatBasePath}-${orientMode}`}
+              key={`merged-${refreshTrigger}-${splatBasePath}-${orientMode}-${pipelineType}-${faceDistance}-${cullMode}`}
               basePath={splatBasePath}
               enabledFaces={enabledFaces}
               splatScale={splatScale}
               orientMode={orientMode}
+              pipelineType={pipelineType}
+              faceDistance={faceDistance}
+              cullMode={cullMode}
             />
           ) : (
             // Separate meshes per face (may have depth issues)
@@ -431,7 +455,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
                 <GaussianSplatCloud
                   key={splatKey(face)}
                   url={`${splatBasePath}input_${face}.ply`}
-                  rotation={CUBE_FACE_ROTATIONS[face]}
+                  rotation={faceRotations[face]}
                   splatScale={splatScale}
                   cullMode={cullMode}
                   face={face}
@@ -481,6 +505,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('generate');
   const [splatRefreshTrigger, setSplatRefreshTrigger] = useState(0);
   const [splatBasePath, setSplatBasePath] = useState('/splats/');
+  const [currentPipelineType, setCurrentPipelineType] = useState(DEFAULT_PIPELINE_TYPE);
 
   const handleSplatsGenerated = (splatsData) => {
     // If splatsData contains a job path, use that; otherwise use default
@@ -488,6 +513,12 @@ function App() {
       setSplatBasePath(`/generated/${splatsData.jobId}/splats/`);
     } else {
       setSplatBasePath('/splats/');
+    }
+    // Update pipeline type if provided
+    if (splatsData?.pipelineType) {
+      setCurrentPipelineType(splatsData.pipelineType);
+    } else {
+      setCurrentPipelineType(DEFAULT_PIPELINE_TYPE);
     }
     // Trigger refresh of the viewer when new splats are generated
     setSplatRefreshTrigger(prev => prev + 1);
@@ -524,7 +555,11 @@ function App() {
           <GenerateDashboard onSplatsGenerated={handleSplatsGenerated} />
         )}
         {activeTab === 'viewer' && (
-          <SplatViewer refreshTrigger={splatRefreshTrigger} splatBasePath={splatBasePath} />
+          <SplatViewer 
+            refreshTrigger={splatRefreshTrigger} 
+            splatBasePath={splatBasePath} 
+            pipelineType={currentPipelineType}
+          />
         )}
       </main>
     </div>

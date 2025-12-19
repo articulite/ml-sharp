@@ -275,16 +275,37 @@ const fragmentShader = `
 `;
 
 // Get frustum direction based on face
-// Directions match where gaussians actually end up after PLY rotation + scale transforms
+// Directions must match where gaussians ACTUALLY end up after CUBE_FACE_ROTATIONS transforms
+// Calculated by transforming (0,0,-1) through each face's rotation matrix
 function getFrustumDirection(face) {
+  const SQRT2_2 = Math.SQRT2 / 2;  // ~0.707
+  
   switch (face) {
-    case 'front':  return new THREE.Vector3(0, 0, -1);
-    case 'back':   return new THREE.Vector3(0, 0, 1);
-    case 'left':   return new THREE.Vector3(1, 0, 0);   // +X (gaussians end up here)
-    case 'right':  return new THREE.Vector3(-1, 0, 0);  // -X (gaussians end up here)
-    case 'top':    return new THREE.Vector3(0, 1, 0);
-    case 'bottom': return new THREE.Vector3(0, -1, 0);
-    default:       return new THREE.Vector3(0, 0, -1);
+    // Cubemap faces - directions where splats actually end up after rotation
+    // front [π,0,0]: (0,0,-1) → (0,0,+1)
+    case 'front':  return new THREE.Vector3(0, 0, 1);
+    // back [π,π,0]: (0,0,-1) → (0,0,-1)
+    case 'back':   return new THREE.Vector3(0, 0, -1);
+    // left [π,-π/2,0]: (0,0,-1) → (-1,0,0)
+    case 'left':   return new THREE.Vector3(-1, 0, 0);
+    // right [π,π/2,0]: (0,0,-1) → (+1,0,0)
+    case 'right':  return new THREE.Vector3(1, 0, 0);
+    // top [-π/2,0,0]: (0,0,-1) → (0,-1,0)
+    case 'top':    return new THREE.Vector3(0, -1, 0);
+    // bottom [π/2,0,0]: (0,0,-1) → (0,+1,0)
+    case 'bottom': return new THREE.Vector3(0, 1, 0);
+    
+    // Cylinder 8 faces (compass directions) - also corrected
+    case 'n':  return new THREE.Vector3(0, 0, 1);             // 0° - same as front
+    case 'ne': return new THREE.Vector3(SQRT2_2, 0, SQRT2_2);    // 45°
+    case 'e':  return new THREE.Vector3(1, 0, 0);             // 90° - same as right
+    case 'se': return new THREE.Vector3(SQRT2_2, 0, -SQRT2_2);   // 135°
+    case 's':  return new THREE.Vector3(0, 0, -1);            // 180° - same as back
+    case 'sw': return new THREE.Vector3(-SQRT2_2, 0, -SQRT2_2);  // 225°
+    case 'w':  return new THREE.Vector3(-1, 0, 0);            // 270° - same as left
+    case 'nw': return new THREE.Vector3(-SQRT2_2, 0, SQRT2_2);   // 315°
+    
+    default:   return new THREE.Vector3(0, 0, 1);
   }
 }
 
@@ -470,9 +491,49 @@ const CUBE_FACE_ROTATIONS = {
   bottom: [Math.PI / 2, 0, 0],
 };
 
+// Cylinder 8 face rotations (8 faces around horizontal cylinder)
+// Each face is rotated 45° from the previous, all at pitch=0
+const CYLINDER_FACE_ROTATIONS = {
+  n:  [Math.PI, 0, 0],                    // 0° - North (front)
+  ne: [Math.PI, Math.PI / 4, 0],          // 45° - Northeast
+  e:  [Math.PI, Math.PI / 2, 0],          // 90° - East (right)
+  se: [Math.PI, 3 * Math.PI / 4, 0],      // 135° - Southeast
+  s:  [Math.PI, Math.PI, 0],              // 180° - South (back)
+  sw: [Math.PI, -3 * Math.PI / 4, 0],     // 225° / -135° - Southwest
+  w:  [Math.PI, -Math.PI / 2, 0],         // 270° / -90° - West (left)
+  nw: [Math.PI, -Math.PI / 4, 0],         // 315° / -45° - Northwest
+};
+
+// Pipeline type definitions
+const PIPELINE_TYPES = {
+  cubemap_6: {
+    faces: ['front', 'back', 'left', 'right', 'top', 'bottom'],
+    rotations: CUBE_FACE_ROTATIONS,
+  },
+  cylinder_8: {
+    faces: ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'],
+    rotations: CYLINDER_FACE_ROTATIONS,
+  },
+};
+
+// Get face rotations for a pipeline type
+function getFaceRotations(pipelineType) {
+  return PIPELINE_TYPES[pipelineType]?.rotations || CUBE_FACE_ROTATIONS;
+}
+
+// Get face list for a pipeline type
+function getFaceList(pipelineType) {
+  return PIPELINE_TYPES[pipelineType]?.faces || PIPELINE_TYPES.cubemap_6.faces;
+}
+
 // Build model matrix for a face
-function buildFaceMatrix(face) {
-  const rotation = CUBE_FACE_ROTATIONS[face];
+function buildFaceMatrix(face, pipelineType = 'cubemap_6') {
+  const rotations = getFaceRotations(pipelineType);
+  const rotation = rotations[face];
+  if (!rotation) {
+    console.warn(`Unknown face "${face}" for pipeline "${pipelineType}"`);
+    return new THREE.Matrix4();
+  }
   const m = new THREE.Matrix4();
   const euler = new THREE.Euler(rotation[0], rotation[1], rotation[2]);
   m.makeRotationFromEuler(euler);
@@ -509,7 +570,7 @@ function transformRotation(qw, qx, qy, qz, matrix) {
  * MergedGaussianSplats - Loads multiple faces, merges into one mesh, sorts by distance from origin
  * This ensures correct depth ordering for a viewer at center looking outward
  */
-function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orientMode = 0 }) {
+function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orientMode = 0, pipelineType = 'cubemap_6', faceDistance = 0, cullMode = 0 }) {
   const meshRef = useRef();
   const [mergedData, setMergedData] = useState(null);
   const { camera, size } = useThree();
@@ -526,7 +587,7 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
         return;
       }
       
-      console.log(`Loading faces: ${faceNames.join(', ')}`);
+      console.log(`Loading faces for ${pipelineType}: ${faceNames.join(', ')}${cullMode === 1 ? ' (with CPU frustum culling)' : ''}`);
       
       // Load all PLY files in parallel
       const faceDataPromises = faceNames.map(async (face) => {
@@ -546,9 +607,19 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
         return;
       }
       
+      // Apply CPU frustum culling per face if enabled (cullMode === 1)
+      let processedResults = faceResults;
+      if (cullMode === 1) {
+        processedResults = faceResults.map(({ face, data }) => {
+          const matrix = buildFaceMatrix(face, pipelineType);
+          const filteredData = filterByFrustum(data, face, matrix.elements);
+          return { face, data: filteredData };
+        });
+      }
+      
       // Count total splats
-      const totalCount = faceResults.reduce((sum, { data }) => sum + data.count, 0);
-      console.log(`Total splats across ${faceResults.length} faces: ${totalCount}`);
+      const totalCount = processedResults.reduce((sum, { data }) => sum + data.count, 0);
+      console.log(`Total splats across ${processedResults.length} faces: ${totalCount}`);
       
       // Allocate merged arrays
       const positions = new Float32Array(totalCount * 3);
@@ -560,8 +631,11 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
       
       // Merge all faces, transforming to world space
       let offset = 0;
-      for (const { face, data } of faceResults) {
-        const matrix = buildFaceMatrix(face);
+      for (const { face, data } of processedResults) {
+        const matrix = buildFaceMatrix(face, pipelineType);
+        
+        // Get face direction for distance offset (pushes face outward from center)
+        const faceDir = getFrustumDirection(face);
         
         for (let i = 0; i < data.count; i++) {
           const idx = offset + i;
@@ -574,12 +648,17 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
           };
           const worldPos = transformPosition(localPos.x, localPos.y, localPos.z, matrix);
           
-          positions[idx * 3] = worldPos.x;
-          positions[idx * 3 + 1] = worldPos.y;
-          positions[idx * 3 + 2] = worldPos.z;
+          // Apply face distance offset (push face outward in its direction)
+          const finalX = worldPos.x + faceDir.x * faceDistance;
+          const finalY = worldPos.y + faceDir.y * faceDistance;
+          const finalZ = worldPos.z + faceDir.z * faceDistance;
+          
+          positions[idx * 3] = finalX;
+          positions[idx * 3 + 1] = finalY;
+          positions[idx * 3 + 2] = finalZ;
           
           // Compute distance from origin for sorting (squared, no sqrt needed)
-          depths[idx] = worldPos.x * worldPos.x + worldPos.y * worldPos.y + worldPos.z * worldPos.z;
+          depths[idx] = finalX * finalX + finalY * finalY + finalZ * finalZ;
           
           // Copy colors directly
           colors[idx * 3] = data.colors[i * 3];
@@ -662,7 +741,7 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
     };
     
     loadAndMerge();
-  }, [basePath, enabledFaces]);
+  }, [basePath, enabledFaces, pipelineType, faceDistance, cullMode]);
   
   const { geometry, material } = useMemo(() => {
     if (!mergedData) return { geometry: null, material: null };
@@ -871,4 +950,4 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
 }
 
 export default GaussianSplatCloud;
-export { MergedGaussianSplats };
+export { MergedGaussianSplats, PIPELINE_TYPES, getFaceList, getFaceRotations };

@@ -152,7 +152,7 @@ function generateJobId() {
   return `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-function ProgressBar({ percent, status, message }) {
+function ProgressBar({ percent, status, message, duration }) {
   const getStatusColor = () => {
     switch (status) {
       case 'completed': return 'var(--accent-emerald)';
@@ -167,6 +167,7 @@ function ProgressBar({ percent, status, message }) {
       <div className="progress-header">
         <span className="progress-status" style={{ color: getStatusColor() }}>
           {status === 'running' ? '◉' : status === 'completed' ? '✓' : status === 'error' ? '✗' : '○'} {status}
+          {duration && <span className="progress-duration"> ({duration}s)</span>}
         </span>
         <span className="progress-percent">{percent.toFixed(0)}%</span>
       </div>
@@ -204,7 +205,7 @@ function GenerateDashboard({ onSplatsGenerated }) {
   const [generateSplats, setGenerateSplats] = useState(true);
   
   const [isProcessing, setIsProcessing] = useState(false);
-  const [progress, setProgress] = useState({ percent: 0, status: 'idle', message: '' });
+  const [progress, setProgress] = useState({ percent: 0, status: 'idle', message: '', duration: null });
   const [results, setResults] = useState(null);
   const [serverOnline, setServerOnline] = useState(false);
   const [loadedJobId, setLoadedJobId] = useState(null);
@@ -212,6 +213,7 @@ function GenerateDashboard({ onSplatsGenerated }) {
   
   const wsRef = useRef(null);
   const fileInputRef = useRef(null);
+  const startTimeRef = useRef(null);
 
   // Check server health
   useEffect(() => {
@@ -322,7 +324,8 @@ function GenerateDashboard({ onSplatsGenerated }) {
     
     const jobId = generateJobId();
     setIsProcessing(true);
-    setProgress({ percent: 0, status: 'running', message: 'Starting pipeline...' });
+    startTimeRef.current = Date.now();
+    setProgress({ percent: 0, status: 'running', message: 'Starting pipeline...', duration: null });
     setResults(null);
     
     // Connect WebSocket for progress updates
@@ -332,14 +335,21 @@ function GenerateDashboard({ onSplatsGenerated }) {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        const isFinished = data.status === 'completed' || data.status === 'error';
+        const duration = isFinished && startTimeRef.current 
+          ? ((Date.now() - startTimeRef.current) / 1000).toFixed(1)
+          : null;
+        
         setProgress({
           percent: data.percent,
           status: data.status,
           message: data.message,
+          duration,
         });
         
-        if (data.status === 'completed' || data.status === 'error') {
+        if (isFinished) {
           setIsProcessing(false);
+          startTimeRef.current = null;
           if (data.results) {
             setResults(data.results);
             setLoadedJobId(null); // Clear loaded job since this is a new one

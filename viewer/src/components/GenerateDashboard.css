@@ -247,6 +247,12 @@
   text-transform: capitalize;
 }
 
+.progress-duration {
+  font-weight: 400;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
 .progress-percent {
   font-size: 0.85rem;
   color: var(--text-muted);
@@ -551,7 +557,93 @@
 
 .face-name {
   font-size: 0.8rem;
-  text-transform: capitalize;
+  text-transform: uppercase;
+}
+
+/* Pipeline Selector */
+.pipeline-selector {
+  margin-bottom: 1.5rem;
+}
+
+.pipeline-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.pipeline-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pipeline-option:hover {
+  background: rgba(0, 212, 255, 0.08);
+}
+
+.pipeline-option.selected {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: var(--accent-emerald);
+}
+
+.pipeline-option input[type="radio"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--accent-emerald);
+  border-radius: 50%;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.pipeline-option input[type="radio"]:checked::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 8px;
+  height: 8px;
+  background: var(--accent-emerald);
+  border-radius: 50%;
+}
+
+.pipeline-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.pipeline-name {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.pipeline-desc {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+/* Config hint */
+.config-hint {
+  font-size: 0.7rem;
+  color: var(--accent-amber);
+  margin-top: 0.35rem;
+}
+
+/* Cylinder grid (8 faces in 2 rows of 4) */
+.faces-grid.cylinder-grid {
+  grid-template-columns: repeat(4, 1fr);
 }
 
 /* Toggle Option */
