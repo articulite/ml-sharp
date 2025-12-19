@@ -181,6 +181,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
   const [panelOpen, setPanelOpen] = useState(true);
   const [cameraResetTrigger, setCameraResetTrigger] = useState(0);
   const [parallaxEnabled, setParallaxEnabled] = useState(false);
+  const [orientToCenter, setOrientToCenter] = useState(false);
   const controlsRef = useRef();
 
   const checkFaces = async (basePath) => {
@@ -222,8 +223,8 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
     setEnabledFaces(prev => ({ ...prev, [face]: !prev[face] }));
   };
 
-  // Key includes cullMode and basePath so components reinitialize when they change
-  const splatKey = (face) => `${face}-cull-${cullMode}-${refreshTrigger}-${splatBasePath}`;
+  // Key includes cullMode, orientToCenter, and basePath so components reinitialize when they change
+  const splatKey = (face) => `${face}-cull-${cullMode}-orient-${orientToCenter}-${refreshTrigger}-${splatBasePath}`;
 
   if (loading) {
     return (
@@ -272,6 +273,18 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
                   onChange={(e) => setSplatScale(parseFloat(e.target.value))}
                 />
               </label>
+            </div>
+
+            <div className="orient-toggle">
+              <label className="face-toggle">
+                <input
+                  type="checkbox"
+                  checked={orientToCenter}
+                  onChange={(e) => setOrientToCenter(e.target.checked)}
+                />
+                <span className="toggle-label">Orient to Center</span>
+              </label>
+              <p className="orient-hint">Face gaussians toward (0,0,0) instead of outward</p>
             </div>
 
             <h2>Frustum Culling</h2>
@@ -349,6 +362,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
                 splatScale={splatScale}
                 cullMode={cullMode}
                 face={face}
+                orientToCenter={orientToCenter}
               />
             )
           ))}

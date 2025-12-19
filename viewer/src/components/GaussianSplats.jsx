@@ -34,6 +34,7 @@ const vertexShader = `
   uniform int cullMode;
   uniform vec3 frustumDir;  // Direction the frustum faces (normalized)
   uniform float frustumAngle; // Half angle in radians (45° for 90° FOV)
+  uniform bool orientToCenter;  // Orient gaussians to face (0,0,0)
   
   // Build rotation matrix from quaternion (w, x, y, z)
   mat3 quatToMat3(vec4 q) {
@@ -43,6 +44,25 @@ const vertexShader = `
       2.0*(x*y + w*z), 1.0 - 2.0*(x*x + z*z), 2.0*(y*z - w*x),
       2.0*(x*z - w*y), 2.0*(y*z + w*x), 1.0 - 2.0*(x*x + y*y)
     );
+  }
+  
+  // Build rotation matrix that orients Z axis toward target direction
+  mat3 lookAtRotation(vec3 pos) {
+    vec3 forward = normalize(-pos);  // Point toward origin
+    
+    // Handle degenerate case (splat at origin)
+    if (length(pos) < 0.0001) {
+      return mat3(1.0);
+    }
+    
+    // Find a suitable "up" vector (avoid parallel with forward)
+    vec3 up = abs(forward.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    
+    vec3 right = normalize(cross(up, forward));
+    up = cross(forward, right);
+    
+    // Build rotation matrix: columns are right, up, forward
+    return mat3(right, up, forward);
   }
   
   // Check if point is inside 90-degree square pyramidal frustum
@@ -100,7 +120,14 @@ const vertexShader = `
     
     // Build 3D covariance in view space
     // Cov = M * diag(s^2) * M^T where M = ViewRot * GaussianRot
-    mat3 R = quatToMat3(splatRotation);
+    mat3 R;
+    if (orientToCenter) {
+      // Orient gaussian to face toward origin (0,0,0)
+      R = lookAtRotation(splatCenter);
+    } else {
+      // Use stored rotation from PLY
+      R = quatToMat3(splatRotation);
+    }
     mat3 M = mat3(modelViewMatrix) * R;
     vec3 s = splatScale * splatScaleMult;
     
@@ -424,7 +451,7 @@ function sortSplatsByDepth(splatData, cameraPos, modelMatrix) {
   };
 }
 
-function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullMode = 0, face = 'front' }) {
+function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullMode = 0, face = 'front', orientToCenter = false }) {
   const meshRef = useRef();
   const [sortedData, setSortedData] = useState(null);
   const { camera, size } = useThree();
@@ -498,7 +525,8 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
         splatScaleMult: { value: splatScale },
         cullMode: { value: cullMode },
         frustumDir: { value: frustumDir },
-        frustumAngle: { value: Math.PI / 4 } // 45° half-angle for 90° FOV
+        frustumAngle: { value: Math.PI / 4 }, // 45° half-angle for 90° FOV
+        orientToCenter: { value: orientToCenter }
       },
       transparent: true,
       depthWrite: false,
@@ -512,7 +540,7 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
     });
     
     return { geometry, material };
-  }, [sortedData, size, cullMode, frustumDir]);
+  }, [sortedData, size, cullMode, frustumDir, orientToCenter]);
   
   useFrame(() => {
     if (material && camera) {
@@ -520,6 +548,7 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
       material.uniforms.splatScaleMult.value = splatScale;
       material.uniforms.cullMode.value = cullMode;
       material.uniforms.frustumDir.value.copy(frustumDir);
+      material.uniforms.orientToCenter.value = orientToCenter;
       
       // Compute focal length from camera
       const fovY = camera.fov * Math.PI / 180;
