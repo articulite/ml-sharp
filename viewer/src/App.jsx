@@ -197,11 +197,11 @@ function SplatViewer() {
               <label>
                 <span>Splat Scale: {splatScale.toFixed(1)}</span>
                 <input
-                  type="range"
-                  min="0.5"
-                  max="20"
-                  step="0.1"
-                  value={splatScale}
+              type="range"
+              min="0.5"
+              max="3"
+              step="0.1"
+              value={splatScale}
                   onChange={(e) => setSplatScale(parseFloat(e.target.value))}
                 />
               </label>
