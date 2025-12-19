@@ -34,7 +34,8 @@ const vertexShader = `
   uniform int cullMode;
   uniform vec3 frustumDir;  // Direction the frustum faces (normalized)
   uniform float frustumAngle; // Half angle in radians (45° for 90° FOV)
-  uniform bool orientToCenter;  // Orient gaussians to face (0,0,0)
+  uniform int orientMode;  // 0=stored rotation, 1=orient to center, 2=billboard to camera
+  uniform vec3 cameraWorldPos;  // Camera position for billboard mode
   
   // Build rotation matrix from quaternion (w, x, y, z)
   mat3 quatToMat3(vec4 q) {
@@ -46,12 +47,12 @@ const vertexShader = `
     );
   }
   
-  // Build rotation matrix that orients Z axis toward target direction
-  mat3 lookAtRotation(vec3 pos) {
-    vec3 forward = normalize(-pos);  // Point toward origin
+  // Build rotation matrix that orients Z axis toward a target point
+  mat3 lookAtRotationToward(vec3 from, vec3 to) {
+    vec3 forward = normalize(to - from);
     
-    // Handle degenerate case (splat at origin)
-    if (length(pos) < 0.0001) {
+    // Handle degenerate case
+    if (length(to - from) < 0.0001) {
       return mat3(1.0);
     }
     
@@ -121,9 +122,12 @@ const vertexShader = `
     // Build 3D covariance in view space
     // Cov = M * diag(s^2) * M^T where M = ViewRot * GaussianRot
     mat3 R;
-    if (orientToCenter) {
+    if (orientMode == 1) {
       // Orient gaussian to face toward origin (0,0,0)
-      R = lookAtRotation(splatCenter);
+      R = lookAtRotationToward(splatCenter, vec3(0.0));
+    } else if (orientMode == 2) {
+      // Billboard: orient gaussian to face the camera
+      R = lookAtRotationToward(splatCenter, cameraWorldPos);
     } else {
       // Use stored rotation from PLY
       R = quatToMat3(splatRotation);
@@ -500,7 +504,7 @@ function transformRotation(qw, qx, qy, qz, matrix) {
  * MergedGaussianSplats - Loads multiple faces, merges into one mesh, sorts by distance from origin
  * This ensures correct depth ordering for a viewer at center looking outward
  */
-function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orientToCenter = false }) {
+function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orientMode = 0 }) {
   const meshRef = useRef();
   const [mergedData, setMergedData] = useState(null);
   const { camera, size } = useThree();
@@ -694,7 +698,8 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
         cullMode: { value: 0 },  // No culling for merged splats
         frustumDir: { value: new THREE.Vector3(0, 0, -1) },
         frustumAngle: { value: Math.PI / 4 },
-        orientToCenter: { value: orientToCenter }
+        orientMode: { value: orientMode },
+        cameraWorldPos: { value: new THREE.Vector3(0, 0, 0) }
       },
       transparent: true,
       depthWrite: false,
@@ -708,13 +713,14 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
     });
     
     return { geometry, material };
-  }, [mergedData, size, orientToCenter, splatScale]);
+  }, [mergedData, size, orientMode, splatScale]);
   
   useFrame(() => {
     if (material && camera) {
       material.uniforms.viewport.value.set(size.width, size.height);
       material.uniforms.splatScaleMult.value = splatScale;
-      material.uniforms.orientToCenter.value = orientToCenter;
+      material.uniforms.orientMode.value = orientMode;
+      material.uniforms.cameraWorldPos.value.copy(camera.position);
       
       const fovY = camera.fov * Math.PI / 180;
       const fy = size.height / (2 * Math.tan(fovY / 2));
@@ -736,7 +742,7 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
   );
 }
 
-function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullMode = 0, face = 'front', orientToCenter = false }) {
+function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullMode = 0, face = 'front', orientMode = 0 }) {
   const meshRef = useRef();
   const [sortedData, setSortedData] = useState(null);
   const { camera, size } = useThree();
@@ -811,7 +817,8 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
         cullMode: { value: cullMode },
         frustumDir: { value: frustumDir },
         frustumAngle: { value: Math.PI / 4 }, // 45° half-angle for 90° FOV
-        orientToCenter: { value: orientToCenter }
+        orientMode: { value: orientMode },
+        cameraWorldPos: { value: new THREE.Vector3(0, 0, 0) }
       },
       transparent: true,
       depthWrite: false,
@@ -825,7 +832,7 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
     });
     
     return { geometry, material };
-  }, [sortedData, size, cullMode, frustumDir, orientToCenter]);
+  }, [sortedData, size, cullMode, frustumDir, orientMode]);
   
   useFrame(() => {
     if (material && camera) {
@@ -833,7 +840,8 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
       material.uniforms.splatScaleMult.value = splatScale;
       material.uniforms.cullMode.value = cullMode;
       material.uniforms.frustumDir.value.copy(frustumDir);
-      material.uniforms.orientToCenter.value = orientToCenter;
+      material.uniforms.orientMode.value = orientMode;
+      material.uniforms.cameraWorldPos.value.copy(camera.position);
       
       // Compute focal length from camera
       const fovY = camera.fov * Math.PI / 180;

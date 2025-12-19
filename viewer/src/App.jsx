@@ -195,7 +195,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
   const [panelOpen, setPanelOpen] = useState(true);
   const [cameraResetTrigger, setCameraResetTrigger] = useState(0);
   const [parallaxEnabled, setParallaxEnabled] = useState(false);
-  const [orientToCenter, setOrientToCenter] = useState(false);
+  const [orientMode, setOrientMode] = useState(2);  // 0=stored, 1=to center, 2=billboard (camera-facing)
   const [useMergedSplats, setUseMergedSplats] = useState(true);  // Use merged by default for correct depth
   const [viewFov, setViewFov] = useState(100);
   const controlsRef = useRef();
@@ -239,8 +239,8 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
     setEnabledFaces(prev => ({ ...prev, [face]: !prev[face] }));
   };
 
-  // Key includes cullMode, orientToCenter, and basePath so components reinitialize when they change
-  const splatKey = (face) => `${face}-cull-${cullMode}-orient-${orientToCenter}-${refreshTrigger}-${splatBasePath}`;
+  // Key includes cullMode, orientMode, and basePath so components reinitialize when they change
+  const splatKey = (face) => `${face}-cull-${cullMode}-orient-${orientMode}-${refreshTrigger}-${splatBasePath}`;
 
   if (loading) {
     return (
@@ -305,17 +305,37 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
               </label>
             </div>
 
-            <div className="orient-toggle">
-              <label className="face-toggle">
+            <h2>Orientation</h2>
+            <div className="orient-mode-selector">
+              <label className="orient-mode-option">
                 <input
-                  type="checkbox"
-                  checked={orientToCenter}
-                  onChange={(e) => setOrientToCenter(e.target.checked)}
+                  type="radio"
+                  name="orientMode"
+                  checked={orientMode === 0}
+                  onChange={() => setOrientMode(0)}
                 />
-                <span className="toggle-label">Orient to Center</span>
+                <span className="orient-mode-name">Stored</span>
               </label>
-              <p className="orient-hint">Face gaussians toward (0,0,0) instead of outward</p>
+              <label className="orient-mode-option">
+                <input
+                  type="radio"
+                  name="orientMode"
+                  checked={orientMode === 1}
+                  onChange={() => setOrientMode(1)}
+                />
+                <span className="orient-mode-name">To Center</span>
+              </label>
+              <label className="orient-mode-option">
+                <input
+                  type="radio"
+                  name="orientMode"
+                  checked={orientMode === 2}
+                  onChange={() => setOrientMode(2)}
+                />
+                <span className="orient-mode-name">Billboard</span>
+              </label>
             </div>
+            <p className="orient-hint">Billboard = always face camera (fixes side-view stretching)</p>
 
             <div className="merge-toggle">
               <label className="face-toggle">
@@ -398,11 +418,11 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
           {useMergedSplats ? (
             // Single merged mesh with all faces - correct depth sorting
             <MergedGaussianSplats
-              key={`merged-${refreshTrigger}-${splatBasePath}`}
+              key={`merged-${refreshTrigger}-${splatBasePath}-${orientMode}`}
               basePath={splatBasePath}
               enabledFaces={enabledFaces}
               splatScale={splatScale}
-              orientToCenter={orientToCenter}
+              orientMode={orientMode}
             />
           ) : (
             // Separate meshes per face (may have depth issues)
@@ -415,7 +435,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
                   splatScale={splatScale}
                   cullMode={cullMode}
                   face={face}
-                  orientToCenter={orientToCenter}
+                  orientMode={orientMode}
                 />
               )
             ))
