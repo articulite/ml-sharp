@@ -3,6 +3,14 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { loadPLY } from '../utils/plyLoader';
 
+/**
+ * Frustum culling modes:
+ * 0 = None - render all gaussians
+ * 1 = CPU Pre-filter - filter gaussians on load, only keep those inside frustum
+ * 2 = GPU Vertex Discard - check in vertex shader, move outside-frustum splats off-screen
+ * 3 = GPU Fragment Discard - transform to world space in fragment and discard outside frustum
+ */
+
 // Vertex shader with proper 2D covariance projection
 const vertexShader = `
   precision highp float;
@@ -18,10 +26,14 @@ const vertexShader = `
   varying vec2 vConicA;  // conic matrix elements for ellipse
   varying float vConicB;
   varying vec2 vCenterOffset;
+  varying vec3 vWorldPos;  // For GPU fragment culling
   
   uniform vec2 viewport;
   uniform vec2 focal;
   uniform float splatScaleMult;
+  uniform int cullMode;
+  uniform vec3 frustumDir;  // Direction the frustum faces (normalized)
+  uniform float frustumAngle; // Half angle in radians (45° for 90° FOV)
   
   // Build rotation matrix from quaternion (w, x, y, z)
   mat3 quatToMat3(vec4 q) {
@@ -33,9 +45,35 @@ const vertexShader = `
     );
   }
   
+  // Check if point is inside 90-degree pyramidal frustum
+  bool isInsideFrustum(vec3 worldPos) {
+    // For 90° FOV, the frustum is a pyramid where at any point along the axis,
+    // the distance from axis equals the depth along axis
+    float depth = dot(worldPos, frustumDir);
+    if (depth <= 0.0) return false;  // Behind the apex
+    
+    // Project point onto plane perpendicular to frustum direction
+    vec3 projOnAxis = depth * frustumDir;
+    vec3 perpComponent = worldPos - projOnAxis;
+    float distFromAxis = length(perpComponent);
+    
+    // For 90° FOV (45° half-angle), tan(45°) = 1, so max distance = depth
+    return distFromAxis <= depth * tan(frustumAngle);
+  }
+  
   void main() {
     vColor = splatColor;
     vOpacity = splatOpacity;
+    
+    // Compute world position for frustum culling
+    vec4 worldPos4 = modelMatrix * vec4(splatCenter, 1.0);
+    vWorldPos = worldPos4.xyz;
+    
+    // GPU Vertex culling mode (mode 2)
+    if (cullMode == 2 && !isInsideFrustum(vWorldPos)) {
+      gl_Position = vec4(0.0, 0.0, 2.0, 1.0);  // Move to clip space
+      return;
+    }
     
     // Transform center to view space
     vec4 viewCenter = modelViewMatrix * vec4(splatCenter, 1.0);
@@ -139,8 +177,30 @@ const fragmentShader = `
   varying vec2 vConicA;
   varying float vConicB;
   varying vec2 vCenterOffset;
+  varying vec3 vWorldPos;
+  
+  uniform int cullMode;
+  uniform vec3 frustumDir;
+  uniform float frustumAngle;
+  
+  // Check if point is inside 90-degree pyramidal frustum
+  bool isInsideFrustum(vec3 worldPos) {
+    float depth = dot(worldPos, frustumDir);
+    if (depth <= 0.0) return false;
+    
+    vec3 projOnAxis = depth * frustumDir;
+    vec3 perpComponent = worldPos - projOnAxis;
+    float distFromAxis = length(perpComponent);
+    
+    return distFromAxis <= depth * tan(frustumAngle);
+  }
   
   void main() {
+    // GPU Fragment culling mode (mode 3)
+    if (cullMode == 3 && !isInsideFrustum(vWorldPos)) {
+      discard;
+    }
+    
     // Compute Mahalanobis distance using inverse covariance (conic)
     // d^2 = x^T * Cov^-1 * x = a*x^2 + 2*b*x*y + c*y^2
     float x = vCenterOffset.x;
@@ -155,6 +215,110 @@ const fragmentShader = `
     gl_FragColor = vec4(vColor * alpha, alpha);
   }
 `;
+
+// Get frustum direction based on face
+function getFrustumDirection(face) {
+  switch (face) {
+    case 'front':  return new THREE.Vector3(0, 0, -1);
+    case 'back':   return new THREE.Vector3(0, 0, 1);
+    case 'left':   return new THREE.Vector3(-1, 0, 0);
+    case 'right':  return new THREE.Vector3(1, 0, 0);
+    case 'top':    return new THREE.Vector3(0, 1, 0);
+    case 'bottom': return new THREE.Vector3(0, -1, 0);
+    default:       return new THREE.Vector3(0, 0, -1);
+  }
+}
+
+// CPU pre-filter: check if a point is inside the pyramidal frustum
+function isInsideFrustumCPU(x, y, z, frustumDir, halfAngle) {
+  // Depth along frustum direction
+  const depth = x * frustumDir.x + y * frustumDir.y + z * frustumDir.z;
+  if (depth <= 0) return false; // Behind apex
+  
+  // Perpendicular distance from frustum axis
+  const projX = depth * frustumDir.x;
+  const projY = depth * frustumDir.y;
+  const projZ = depth * frustumDir.z;
+  
+  const perpX = x - projX;
+  const perpY = y - projY;
+  const perpZ = z - projZ;
+  
+  const distFromAxis = Math.sqrt(perpX * perpX + perpY * perpY + perpZ * perpZ);
+  
+  // For 90° FOV, tan(45°) = 1, so max distance = depth
+  return distFromAxis <= depth * Math.tan(halfAngle);
+}
+
+// Apply CPU frustum culling to splat data
+function filterByFrustum(splatData, face, modelMatrix) {
+  const frustumDir = getFrustumDirection(face);
+  const halfAngle = Math.PI / 4; // 45° for 90° FOV
+  
+  const count = splatData.count;
+  const validIndices = [];
+  
+  // Transform frustum direction by inverse of model matrix rotation
+  // Actually we need to transform positions to world space and check
+  const m = modelMatrix;
+  
+  for (let i = 0; i < count; i++) {
+    const lx = splatData.positions[i * 3];
+    const ly = splatData.positions[i * 3 + 1];
+    const lz = splatData.positions[i * 3 + 2];
+    
+    // Transform to world space
+    const wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12];
+    const wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13];
+    const wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
+    
+    if (isInsideFrustumCPU(wx, wy, wz, frustumDir, halfAngle)) {
+      validIndices.push(i);
+    }
+  }
+  
+  // Create filtered arrays
+  const newCount = validIndices.length;
+  const newPositions = new Float32Array(newCount * 3);
+  const newColors = new Float32Array(newCount * 3);
+  const newOpacities = new Float32Array(newCount);
+  const newScales = new Float32Array(newCount * 3);
+  const newRotations = new Float32Array(newCount * 4);
+  
+  for (let i = 0; i < newCount; i++) {
+    const srcIdx = validIndices[i];
+    
+    newPositions[i * 3] = splatData.positions[srcIdx * 3];
+    newPositions[i * 3 + 1] = splatData.positions[srcIdx * 3 + 1];
+    newPositions[i * 3 + 2] = splatData.positions[srcIdx * 3 + 2];
+    
+    newColors[i * 3] = splatData.colors[srcIdx * 3];
+    newColors[i * 3 + 1] = splatData.colors[srcIdx * 3 + 1];
+    newColors[i * 3 + 2] = splatData.colors[srcIdx * 3 + 2];
+    
+    newOpacities[i] = splatData.opacities[srcIdx];
+    
+    newScales[i * 3] = splatData.scales[srcIdx * 3];
+    newScales[i * 3 + 1] = splatData.scales[srcIdx * 3 + 1];
+    newScales[i * 3 + 2] = splatData.scales[srcIdx * 3 + 2];
+    
+    newRotations[i * 4] = splatData.rotations[srcIdx * 4];
+    newRotations[i * 4 + 1] = splatData.rotations[srcIdx * 4 + 1];
+    newRotations[i * 4 + 2] = splatData.rotations[srcIdx * 4 + 2];
+    newRotations[i * 4 + 3] = splatData.rotations[srcIdx * 4 + 3];
+  }
+  
+  console.log(`Frustum culling (${face}): ${count} -> ${newCount} splats (${((1 - newCount/count) * 100).toFixed(1)}% culled)`);
+  
+  return {
+    positions: newPositions,
+    colors: newColors,
+    opacities: newOpacities,
+    scales: newScales,
+    rotations: newRotations,
+    count: newCount
+  };
+}
 
 // Sort splats by depth (back to front) for correct alpha blending
 function sortSplatsByDepth(splatData, cameraPos, modelMatrix) {
@@ -224,10 +388,13 @@ function sortSplatsByDepth(splatData, cameraPos, modelMatrix) {
   };
 }
 
-function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0 }) {
+function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullMode = 0, face = 'front' }) {
   const meshRef = useRef();
   const [sortedData, setSortedData] = useState(null);
   const { camera, size } = useThree();
+  
+  // Get frustum direction for this face
+  const frustumDir = useMemo(() => getFrustumDirection(face), [face]);
   
   // Build model matrix from rotation and scale props
   const modelMatrix = useMemo(() => {
@@ -241,11 +408,18 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0 }) {
   // Load and sort once
   useEffect(() => {
     loadPLY(url).then(data => {
-      // Sort once based on initial camera position
-      const sorted = sortSplatsByDepth(data, camera.position, modelMatrix);
+      let processedData = data;
+      
+      // Apply CPU frustum culling if mode is 1
+      if (cullMode === 1) {
+        processedData = filterByFrustum(data, face, modelMatrix);
+      }
+      
+      // Sort based on initial camera position
+      const sorted = sortSplatsByDepth(processedData, camera.position, modelMatrix);
       setSortedData(sorted);
     }).catch(console.error);
-  }, [url, modelMatrix]);
+  }, [url, modelMatrix, cullMode, face]);
   
   const { geometry, material } = useMemo(() => {
     if (!sortedData) return { geometry: null, material: null };
@@ -285,7 +459,10 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0 }) {
       uniforms: {
         viewport: { value: new THREE.Vector2(size.width, size.height) },
         focal: { value: new THREE.Vector2(size.height / 2, size.height / 2) },
-        splatScaleMult: { value: splatScale }
+        splatScaleMult: { value: splatScale },
+        cullMode: { value: cullMode },
+        frustumDir: { value: frustumDir },
+        frustumAngle: { value: Math.PI / 4 } // 45° half-angle for 90° FOV
       },
       transparent: true,
       depthWrite: false,
@@ -299,12 +476,14 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0 }) {
     });
     
     return { geometry, material };
-  }, [sortedData, size]);
+  }, [sortedData, size, cullMode, frustumDir]);
   
   useFrame(() => {
     if (material && camera) {
       material.uniforms.viewport.value.set(size.width, size.height);
       material.uniforms.splatScaleMult.value = splatScale;
+      material.uniforms.cullMode.value = cullMode;
+      material.uniforms.frustumDir.value.copy(frustumDir);
       
       // Compute focal length from camera
       const fovY = camera.fov * Math.PI / 180;

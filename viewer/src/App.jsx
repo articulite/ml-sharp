@@ -3,6 +3,7 @@ import { OrbitControls } from '@react-three/drei';
 import { Suspense, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import GaussianSplatCloud from './components/GaussianSplats';
+import { FrustumVisualizer, FrustumWireframe } from './components/FrustumVisualizer';
 import './App.css';
 
 // Cube face orientations (Euler angles in radians)
@@ -17,6 +18,14 @@ const CUBE_FACE_ROTATIONS = {
 };
 
 const SPLAT_BASE_PATH = '/splats/';
+
+// Culling mode descriptions
+const CULL_MODES = [
+  { id: 0, name: 'None', desc: 'Render all gaussians' },
+  { id: 1, name: 'CPU Pre-filter', desc: 'Filter on load (fastest runtime)' },
+  { id: 2, name: 'GPU Vertex', desc: 'Discard in vertex shader' },
+  { id: 3, name: 'GPU Fragment', desc: 'Discard in fragment shader' },
+];
 
 // WASD + QE camera controls
 function WASDControls({ speed = 0.05, controlsRef }) {
@@ -108,6 +117,10 @@ function SplatViewer() {
   const [enabledFaces, setEnabledFaces] = useState({});
   const [loading, setLoading] = useState(true);
   const [splatScale, setSplatScale] = useState(1.0);
+  const [cullMode, setCullMode] = useState(0);
+  const [showFrustums, setShowFrustums] = useState(true);
+  const [frustumDepth, setFrustumDepth] = useState(2.0);
+  const [panelOpen, setPanelOpen] = useState(true);
   const controlsRef = useRef();
 
   useEffect(() => {
@@ -122,7 +135,8 @@ function SplatViewer() {
           const response = await fetch(`${SPLAT_BASE_PATH}input_${face}.ply`, { method: 'HEAD' });
           if (response.ok) {
             available.push(face);
-            enabled[face] = true;
+            // Default: only enable 'front' face on initial load
+            enabled[face] = (face === 'front');
           }
         } catch {
           // File not available
@@ -141,6 +155,9 @@ function SplatViewer() {
     setEnabledFaces(prev => ({ ...prev, [face]: !prev[face] }));
   };
 
+  // Key includes cullMode so components reinitialize when culling mode changes
+  const splatKey = (face) => `${face}-cull-${cullMode}`;
+
   if (loading) {
     return (
       <div className="loading-screen">
@@ -152,37 +169,85 @@ function SplatViewer() {
 
   return (
     <div className="viewer-container">
-      <div className="controls-panel">
-        <h2>Cube Faces</h2>
-        <div className="face-toggles">
-          {availableFaces.map(face => (
-            <label key={face} className="face-toggle">
-              <input
-                type="checkbox"
-                checked={enabledFaces[face] || false}
-                onChange={() => toggleFace(face)}
-              />
-              <span className="toggle-label">{face}</span>
-            </label>
-          ))}
-        </div>
-        {availableFaces.length === 0 && (
-          <p className="no-faces-message">No splat files found in /splats/</p>
-        )}
+      <div className={`controls-panel ${panelOpen ? 'open' : 'closed'}`}>
+        <button className="panel-toggle" onClick={() => setPanelOpen(!panelOpen)}>
+          {panelOpen ? '◀' : '▶'}
+        </button>
         
-        <div className="scale-slider">
-          <label>
-            <span>Splat Scale: {splatScale.toFixed(1)}</span>
-            <input
-              type="range"
-              min="0.5"
-              max="20"
-              step="0.1"
-              value={splatScale}
-              onChange={(e) => setSplatScale(parseFloat(e.target.value))}
-            />
-          </label>
-        </div>
+        {panelOpen && (
+          <>
+            <h2>Cube Faces</h2>
+            <div className="face-toggles">
+              {availableFaces.map(face => (
+                <label key={face} className="face-toggle">
+                  <input
+                    type="checkbox"
+                    checked={enabledFaces[face] || false}
+                    onChange={() => toggleFace(face)}
+                  />
+                  <span className="toggle-label">{face}</span>
+                </label>
+              ))}
+            </div>
+            {availableFaces.length === 0 && (
+              <p className="no-faces-message">No splat files found in /splats/</p>
+            )}
+            
+            <div className="scale-slider">
+              <label>
+                <span>Splat Scale: {splatScale.toFixed(1)}</span>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="20"
+                  step="0.1"
+                  value={splatScale}
+                  onChange={(e) => setSplatScale(parseFloat(e.target.value))}
+                />
+              </label>
+            </div>
+
+            <h2>Frustum Culling</h2>
+            <div className="cull-mode-selector">
+              {CULL_MODES.map(mode => (
+                <label key={mode.id} className="cull-mode-option">
+                  <input
+                    type="radio"
+                    name="cullMode"
+                    checked={cullMode === mode.id}
+                    onChange={() => setCullMode(mode.id)}
+                  />
+                  <div className="cull-mode-info">
+                    <span className="cull-mode-name">{mode.name}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
+
+            <div className="frustum-controls">
+              <label className="frustum-toggle">
+                <input
+                  type="checkbox"
+                  checked={showFrustums}
+                  onChange={(e) => setShowFrustums(e.target.checked)}
+                />
+                <span>Show Frustums</span>
+              </label>
+              
+              <label className="frustum-depth-slider">
+                <span>Depth: {frustumDepth.toFixed(1)}</span>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="5"
+                  step="0.1"
+                  value={frustumDepth}
+                  onChange={(e) => setFrustumDepth(parseFloat(e.target.value))}
+                />
+              </label>
+            </div>
+          </>
+        )}
       </div>
 
       <Canvas
@@ -197,14 +262,34 @@ function SplatViewer() {
           {availableFaces.map(face => (
             enabledFaces[face] && (
               <GaussianSplatCloud
-                key={face}
+                key={splatKey(face)}
                 url={`${SPLAT_BASE_PATH}input_${face}.ply`}
                 rotation={CUBE_FACE_ROTATIONS[face]}
                 splatScale={splatScale}
+                cullMode={cullMode}
+                face={face}
               />
             )
           ))}
         </Suspense>
+
+        {/* Frustum visualizations for enabled faces */}
+        {showFrustums && availableFaces.map(face => (
+          enabledFaces[face] && (
+            <group key={`frustum-${face}`}>
+              <FrustumVisualizer 
+                direction={face} 
+                depth={frustumDepth} 
+                visible={true} 
+              />
+              <FrustumWireframe 
+                direction={face} 
+                depth={frustumDepth} 
+                visible={true} 
+              />
+            </group>
+          )
+        ))}
         
         <WASDControls speed={0.05} controlsRef={controlsRef} />
         <OrbitControls 
