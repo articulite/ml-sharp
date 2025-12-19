@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
@@ -31,6 +33,13 @@ from sharp.cli.equirect_to_cubefaces import (
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
+
+# Thread pool for CPU-bound inference tasks
+INFERENCE_POOL = ThreadPoolExecutor(max_workers=4)
+
+# Global model cache - loaded once, reused for all requests
+_cached_model: Any = None
+_cached_device: str | None = None
 
 app = FastAPI(title="Sharp Pipeline API", description="Equirectangular to Cubemap/Splats Pipeline")
 
@@ -189,27 +198,48 @@ def get_cached_model_path() -> Path | None:
     return None
 
 
-async def run_predict(
-    cubefaces_path: Path,
-    output_path: Path,
-    splats_output_path: Path,
-    fov: float,
-    faces_to_process: list[str],
-    progress: PipelineProgress,
-    device: str = "default",
-) -> dict:
-    """Run Gaussian splat prediction with progress updates."""
+def get_best_device() -> str:
+    """Determine the best available device for inference."""
     import torch
-    import torch.nn.functional as F
+    import sys
     
+    # Debug: show which Python and torch we're using
+    LOGGER.info(f"Python executable: {sys.executable}")
+    LOGGER.info(f"Torch version: {torch.__version__}")
+    LOGGER.info(f"Torch file: {torch.__file__}")
+    LOGGER.info(f"CUDA built: {torch.version.cuda}")
+    LOGGER.info(f"CUDA available: {torch.cuda.is_available()}")
+    
+    if torch.cuda.is_available():
+        # Log GPU info
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
+        LOGGER.info(f"CUDA available: {gpu_name} ({gpu_memory:.1f} GB)")
+        return "cuda"
+    elif hasattr(torch, 'mps') and torch.mps.is_available():
+        LOGGER.info("MPS (Apple Silicon) available")
+        return "mps"
+    else:
+        LOGGER.warning("No GPU available, using CPU (this will be slow!)")
+        return "cpu"
+
+
+def get_or_load_model():
+    """Get the cached model or load it if not cached.
+    
+    This function ensures the model is loaded only once and kept in memory
+    for fast subsequent predictions.
+    """
+    global _cached_model, _cached_device
+    
+    import torch
     from sharp.models import PredictorParams, create_predictor
-    from sharp.utils import io as sharp_io
-    from sharp.utils.gaussians import save_ply, unproject_gaussians
     
-    progress.message = "Checking for Sharp model..."
-    await send_progress(progress.job_id, progress)
+    if _cached_model is not None:
+        LOGGER.info(f"Using cached model on {_cached_device}")
+        return _cached_model, _cached_device
     
-    # Check if model is cached
+    # Check if model weights are available
     model_path = get_cached_model_path()
     if model_path is None:
         raise RuntimeError(
@@ -218,61 +248,125 @@ async def run_predict(
             "This will download and cache the model for future use."
         )
     
-    # Determine device
-    if device == "default":
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif torch.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
+    # Determine best device
+    _cached_device = get_best_device()
     
-    LOGGER.info(f"Using device: {device}")
-    progress.message = f"Loading model on {device}..."
-    await send_progress(progress.job_id, progress)
+    LOGGER.info(f"Loading model from {model_path} onto {_cached_device}...")
     
-    # Load model from cache
-    LOGGER.info(f"Loading model from {model_path}")
-    state_dict = torch.load(model_path, weights_only=True)
+    # Load model with map_location to target device directly
+    state_dict = torch.load(model_path, weights_only=True, map_location=_cached_device)
     
-    gaussian_predictor = create_predictor(PredictorParams())
-    gaussian_predictor.load_state_dict(state_dict)
-    gaussian_predictor.eval()
-    gaussian_predictor.to(device)
+    _cached_model = create_predictor(PredictorParams())
+    _cached_model.load_state_dict(state_dict)
+    _cached_model.eval()
+    _cached_model.to(_cached_device)
     
-    progress.current_step += 1
-    progress.message = "Model loaded successfully"
-    await send_progress(progress.job_id, progress)
+    # Note: torch.compile requires Triton which isn't available on Windows
+    # Skip compilation - eager mode is still fast on GPU
     
-    # Find cube face images (use set to avoid duplicates from case-insensitive matching)
-    extensions = sharp_io.get_supported_image_extensions()
-    image_paths_set = set()
-    for ext in extensions:
-        for p in cubefaces_path.glob(f"*{ext}"):
-            # Use resolve() to get canonical path, avoiding duplicates
-            image_paths_set.add(p.resolve())
-    
-    image_paths = list(image_paths_set)
-    
-    # Filter by face names
-    if faces_to_process:
-        image_paths = [
-            p for p in image_paths
-            if any(face in p.stem.lower() for face in faces_to_process)
-        ]
-    
-    output_path.mkdir(parents=True, exist_ok=True)
-    splats_output_path.mkdir(parents=True, exist_ok=True)
-    generated_splats = []
+    LOGGER.info(f"Model loaded successfully on {_cached_device}")
+    return _cached_model, _cached_device
+
+
+def _predict_single_image_sync(
+    model,
+    device: str,
+    image_path: Path,
+    fov: float,
+    output_path: Path,
+    splats_output_path: Path,
+    job_id: str,
+) -> dict:
+    """Synchronous prediction for a single image (runs in thread pool)."""
+    import torch
+    import torch.nn.functional as F
+    from sharp.utils.gaussians import save_ply, unproject_gaussians
     
     internal_shape = (1536, 1536)
     
-    for i, image_path in enumerate(image_paths):
-        progress.current_step += 1
-        progress.message = f"Generating splats for {image_path.stem} ({i + 1}/{len(image_paths)})"
-        await send_progress(progress.job_id, progress)
-        
-        # Load image directly (skip sharp_io.load_rgb to avoid EXIF warning since we compute focal length from FOV)
+    # Load image
+    img_pil = Image.open(image_path)
+    image = np.array(img_pil)
+    if image.ndim == 2:
+        image = np.stack([image] * 3, axis=-1)
+    elif image.shape[-1] == 4:
+        image = image[..., :3]
+    
+    height, width = image.shape[:2]
+    
+    # Compute focal length from FOV
+    size = min(width, height)
+    f_px = size / (2 * np.tan(np.deg2rad(fov) / 2))
+    LOGGER.info(f"Using FOV {fov}° -> focal length {f_px:.2f}px for {image_path.stem}")
+    
+    # Preprocess
+    image_pt = torch.from_numpy(image.copy()).float().to(device).permute(2, 0, 1) / 255.0
+    disparity_factor = torch.tensor([f_px / width]).float().to(device)
+    
+    image_resized_pt = F.interpolate(
+        image_pt[None],
+        size=(internal_shape[1], internal_shape[0]),
+        mode="bilinear",
+        align_corners=True,
+    )
+    
+    # Predict
+    with torch.no_grad():
+        gaussians_ndc = model(image_resized_pt, disparity_factor)
+    
+    # Postprocess
+    intrinsics = torch.tensor([
+        [f_px, 0, width / 2, 0],
+        [0, f_px, height / 2, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+    ]).float().to(device)
+    
+    intrinsics_resized = intrinsics.clone()
+    intrinsics_resized[0] *= internal_shape[0] / width
+    intrinsics_resized[1] *= internal_shape[1] / height
+    
+    gaussians = unproject_gaussians(
+        gaussians_ndc, torch.eye(4).to(device), intrinsics_resized, internal_shape
+    )
+    
+    # Save PLY to job output
+    ply_filename = f"{image_path.stem}.ply"
+    ply_path = output_path / ply_filename
+    save_ply(gaussians, f_px, (height, width), ply_path)
+    
+    # Also copy to splats directory for viewer
+    splats_ply_path = splats_output_path / ply_filename
+    save_ply(gaussians, f_px, (height, width), splats_ply_path)
+    
+    return {
+        "name": image_path.stem,
+        "filename": ply_filename,
+        "url": f"/generated/{job_id}/splats/{ply_filename}",
+        "viewer_url": f"/splats/{ply_filename}",
+    }
+
+
+def _predict_batch_sync(
+    model,
+    device: str,
+    image_paths: list[Path],
+    fov: float,
+    output_path: Path,
+    splats_output_path: Path,
+    job_id: str,
+) -> list[dict]:
+    """Process all images in a batch for maximum GPU utilization."""
+    import torch
+    import torch.nn.functional as F
+    from sharp.utils.gaussians import save_ply, unproject_gaussians
+    
+    internal_shape = (1536, 1536)
+    results = []
+    
+    # Pre-load and preprocess all images
+    images_data = []
+    for image_path in image_paths:
         img_pil = Image.open(image_path)
         image = np.array(img_pil)
         if image.ndim == 2:
@@ -281,11 +375,25 @@ async def run_predict(
             image = image[..., :3]
         
         height, width = image.shape[:2]
-        
-        # Compute focal length from FOV (this is what the user set in the dashboard)
         size = min(width, height)
         f_px = size / (2 * np.tan(np.deg2rad(fov) / 2))
+        
+        images_data.append({
+            "path": image_path,
+            "image": image,
+            "height": height,
+            "width": width,
+            "f_px": f_px,
+        })
         LOGGER.info(f"Using FOV {fov}° -> focal length {f_px:.2f}px for {image_path.stem}")
+    
+    # Process images - batch on GPU if memory allows, otherwise sequential
+    # For safety, we'll do them sequentially but keep the model hot
+    for data in images_data:
+        image = data["image"]
+        height, width = data["height"], data["width"]
+        f_px = data["f_px"]
+        image_path = data["path"]
         
         # Preprocess
         image_pt = torch.from_numpy(image.copy()).float().to(device).permute(2, 0, 1) / 255.0
@@ -298,9 +406,13 @@ async def run_predict(
             align_corners=True,
         )
         
-        # Predict
+        # Predict - model is hot, this should be fast
         with torch.no_grad():
-            gaussians_ndc = gaussian_predictor(image_resized_pt, disparity_factor)
+            if device == "cuda":
+                torch.cuda.synchronize()  # Ensure previous ops complete
+            gaussians_ndc = model(image_resized_pt, disparity_factor)
+            if device == "cuda":
+                torch.cuda.synchronize()  # Ensure inference completes
         
         # Postprocess
         intrinsics = torch.tensor([
@@ -318,31 +430,118 @@ async def run_predict(
             gaussians_ndc, torch.eye(4).to(device), intrinsics_resized, internal_shape
         )
         
-        # Save PLY to job output
+        # Save PLY
         ply_filename = f"{image_path.stem}.ply"
         ply_path = output_path / ply_filename
         save_ply(gaussians, f_px, (height, width), ply_path)
         
-        # Also copy to splats directory for viewer
         splats_ply_path = splats_output_path / ply_filename
         save_ply(gaussians, f_px, (height, width), splats_ply_path)
         
-        generated_splats.append({
+        results.append({
             "name": image_path.stem,
             "filename": ply_filename,
-            "url": f"/generated/{progress.job_id}/splats/{ply_filename}",
+            "url": f"/generated/{job_id}/splats/{ply_filename}",
             "viewer_url": f"/splats/{ply_filename}",
         })
-        
-        await asyncio.sleep(0.05)
+    
+    return results
+
+
+async def run_predict(
+    cubefaces_path: Path,
+    output_path: Path,
+    splats_output_path: Path,
+    fov: float,
+    faces_to_process: list[str],
+    progress: PipelineProgress,
+    device: str = "default",
+) -> dict:
+    """Run Gaussian splat prediction with progress updates.
+    
+    Uses cached model for fast inference and processes all faces efficiently.
+    """
+    from sharp.utils import io as sharp_io
+    
+    progress.message = "Loading Sharp model..."
+    await send_progress(progress.job_id, progress)
+    
+    # Get or load the cached model (fast if already loaded)
+    model, device = get_or_load_model()
+    
+    progress.current_step += 1
+    progress.message = f"Model ready on {device.upper()}"
+    await send_progress(progress.job_id, progress)
+    
+    # Find cube face images
+    extensions = sharp_io.get_supported_image_extensions()
+    image_paths_set = set()
+    for ext in extensions:
+        for p in cubefaces_path.glob(f"*{ext}"):
+            image_paths_set.add(p.resolve())
+    
+    image_paths = list(image_paths_set)
+    
+    # Filter by face names
+    if faces_to_process:
+        image_paths = [
+            p for p in image_paths
+            if any(face in p.stem.lower() for face in faces_to_process)
+        ]
+    
+    output_path.mkdir(parents=True, exist_ok=True)
+    splats_output_path.mkdir(parents=True, exist_ok=True)
+    
+    progress.message = f"Generating splats for {len(image_paths)} faces..."
+    await send_progress(progress.job_id, progress)
+    
+    # Run batch prediction in thread pool to not block the event loop
+    loop = asyncio.get_event_loop()
+    generated_splats = await loop.run_in_executor(
+        INFERENCE_POOL,
+        _predict_batch_sync,
+        model,
+        device,
+        image_paths,
+        fov,
+        output_path,
+        splats_output_path,
+        progress.job_id,
+    )
+    
+    # Update progress for all processed faces
+    progress.current_step += len(image_paths)
+    progress.message = f"Generated {len(generated_splats)} splat files"
+    await send_progress(progress.job_id, progress)
     
     return {"splats": generated_splats}
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Pre-load the model on server startup for fast first request."""
+    LOGGER.info("Server starting up, pre-loading Sharp model...")
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(INFERENCE_POOL, get_or_load_model)
+        LOGGER.info("Model pre-loaded successfully!")
+    except Exception as e:
+        LOGGER.warning(f"Could not pre-load model (will load on first request): {e}")
 
 
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/api/model-status")
+async def model_status():
+    """Check if model is loaded and what device it's using."""
+    return {
+        "loaded": _cached_model is not None,
+        "device": _cached_device,
+    }
 
 
 @app.websocket("/ws/{job_id}")

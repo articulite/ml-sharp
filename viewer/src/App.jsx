@@ -28,6 +28,63 @@ const CULL_MODES = [
   { id: 3, name: 'GPU Fragment', desc: 'Discard in fragment shader' },
 ];
 
+// Camera reset component
+function CameraReset({ trigger, controlsRef }) {
+  const { camera } = useThree();
+  
+  useEffect(() => {
+    if (trigger > 0) {
+      camera.position.set(0, 0, 0);
+      if (controlsRef?.current) {
+        controlsRef.current.target.set(0, 0, -0.001);
+        controlsRef.current.minDistance = 0;
+        controlsRef.current.update();
+      }
+    }
+  }, [trigger, camera, controlsRef]);
+  
+  return null;
+}
+
+// Parallax animation - moves camera in tight circle while maintaining look direction
+function ParallaxAnimation({ enabled, radius = 0.05, speed = 0.5, controlsRef }) {
+  const { camera } = useThree();
+  const prevOffset = useRef(new THREE.Vector3());
+  
+  useFrame(({ clock }) => {
+    if (!enabled) {
+      // Remove any remaining offset when disabled
+      if (prevOffset.current.lengthSq() > 0) {
+        camera.position.sub(prevOffset.current);
+        if (controlsRef?.current) {
+          controlsRef.current.target.sub(prevOffset.current);
+          controlsRef.current.update();
+        }
+        prevOffset.current.set(0, 0, 0);
+      }
+      return;
+    }
+    
+    const t = clock.getElapsedTime() * speed;
+    const newOffset = new THREE.Vector3(
+      Math.cos(t) * radius,
+      Math.sin(t) * radius,
+      0
+    );
+    
+    // Remove previous offset, apply new offset
+    camera.position.sub(prevOffset.current).add(newOffset);
+    
+    if (controlsRef?.current) {
+      controlsRef.current.target.sub(prevOffset.current).add(newOffset);
+    }
+    
+    prevOffset.current.copy(newOffset);
+  });
+  
+  return null;
+}
+
 // WASD + QE camera controls
 function WASDControls({ speed = 0.05, controlsRef }) {
   const { camera } = useThree();
@@ -122,6 +179,8 @@ function SplatViewer({ refreshTrigger }) {
   const [showFrustums, setShowFrustums] = useState(true);
   const [frustumDepth, setFrustumDepth] = useState(2.0);
   const [panelOpen, setPanelOpen] = useState(true);
+  const [cameraResetTrigger, setCameraResetTrigger] = useState(0);
+  const [parallaxEnabled, setParallaxEnabled] = useState(false);
   const controlsRef = useRef();
 
   const checkFaces = async () => {
@@ -254,6 +313,20 @@ function SplatViewer({ refreshTrigger }) {
                 />
               </label>
             </div>
+
+            <button 
+              className="reset-camera-btn"
+              onClick={() => setCameraResetTrigger(prev => prev + 1)}
+            >
+              Reset Camera to Origin
+            </button>
+
+            <button 
+              className={`parallax-btn ${parallaxEnabled ? 'active' : ''}`}
+              onClick={() => setParallaxEnabled(prev => !prev)}
+            >
+              {parallaxEnabled ? 'Stop Parallax' : 'Start Parallax'}
+            </button>
           </>
         )}
       </div>
@@ -300,6 +373,8 @@ function SplatViewer({ refreshTrigger }) {
         ))}
         
         <WASDControls speed={0.05} controlsRef={controlsRef} />
+        <CameraReset trigger={cameraResetTrigger} controlsRef={controlsRef} />
+        <ParallaxAnimation enabled={parallaxEnabled} controlsRef={controlsRef} />
         <OrbitControls 
           ref={controlsRef}
           enableDamping 

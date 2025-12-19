@@ -451,6 +451,57 @@ body {
   box-shadow: 0 0 8px rgba(0, 255, 136, 0.5);
 }
 
+.reset-camera-btn {
+  margin-top: 1rem;
+  padding: 0.6rem 1rem;
+  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-magenta));
+  border: none;
+  border-radius: 6px;
+  color: #000;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.reset-camera-btn:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.reset-camera-btn:active {
+  transform: translateY(0);
+}
+
+.parallax-btn {
+  margin-top: 0.5rem;
+  padding: 0.6rem 1rem;
+  background: var(--bg-dark);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.parallax-btn:hover {
+  border-color: var(--accent-cyan);
+}
+
+.parallax-btn.active {
+  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-magenta));
+  border-color: transparent;
+  color: #000;
+}
+
 /* Canvas container */
 canvas {
   display: block;
