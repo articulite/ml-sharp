@@ -12,8 +12,8 @@ import './App.css';
 const CUBE_FACE_ROTATIONS = {
   front:  [Math.PI, 0, 0],
   back:   [Math.PI, Math.PI, 0],
-  left:   [Math.PI, Math.PI / 2, 0],
-  right:  [Math.PI, -Math.PI / 2, 0],
+  left:   [Math.PI, -Math.PI / 2, 0],  // Swapped with right
+  right:  [Math.PI, Math.PI / 2, 0],   // Swapped with left
   top:    [-Math.PI / 2, 0, 0],
   bottom: [Math.PI / 2, 0, 0],
 };

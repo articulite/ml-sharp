@@ -464,8 +464,8 @@ function sortSplatsByDepth(splatData, cameraPos, modelMatrix) {
 const CUBE_FACE_ROTATIONS = {
   front:  [Math.PI, 0, 0],
   back:   [Math.PI, Math.PI, 0],
-  left:   [Math.PI, Math.PI / 2, 0],
-  right:  [Math.PI, -Math.PI / 2, 0],
+  left:   [Math.PI, -Math.PI / 2, 0],  // Swapped with right
+  right:  [Math.PI, Math.PI / 2, 0],   // Swapped with left
   top:    [-Math.PI / 2, 0, 0],
   bottom: [Math.PI / 2, 0, 0],
 };
@@ -476,7 +476,7 @@ function buildFaceMatrix(face) {
   const m = new THREE.Matrix4();
   const euler = new THREE.Euler(rotation[0], rotation[1], rotation[2]);
   m.makeRotationFromEuler(euler);
-  m.scale(new THREE.Vector3(-1, 1, 1));
+  // No X flip - keep correct orientation
   return m;
 }
 
@@ -755,12 +755,12 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
   // Get frustum direction for this face
   const frustumDir = useMemo(() => getFrustumDirection(face), [face]);
   
-  // Build model matrix from rotation and scale props
+  // Build model matrix from rotation props
   const modelMatrix = useMemo(() => {
     const m = new THREE.Matrix4();
     const euler = new THREE.Euler(rotation[0], rotation[1], rotation[2]);
     m.makeRotationFromEuler(euler);
-    m.scale(new THREE.Vector3(-1, 1, 1));
+    // No X flip - keep correct orientation
     return m.elements;
   }, [rotation]);
   
@@ -866,7 +866,6 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
       geometry={geometry} 
       material={material} 
       rotation={rotation}
-      scale={[-1, 1, 1]}
     />
   );
 }
