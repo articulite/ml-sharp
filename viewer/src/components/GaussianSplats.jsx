@@ -451,6 +451,291 @@ function sortSplatsByDepth(splatData, cameraPos, modelMatrix) {
   };
 }
 
+// Cube face rotations (must match App.jsx)
+const CUBE_FACE_ROTATIONS = {
+  front:  [Math.PI, 0, 0],
+  back:   [Math.PI, Math.PI, 0],
+  left:   [Math.PI, Math.PI / 2, 0],
+  right:  [Math.PI, -Math.PI / 2, 0],
+  top:    [-Math.PI / 2, 0, 0],
+  bottom: [Math.PI / 2, 0, 0],
+};
+
+// Build model matrix for a face
+function buildFaceMatrix(face) {
+  const rotation = CUBE_FACE_ROTATIONS[face];
+  const m = new THREE.Matrix4();
+  const euler = new THREE.Euler(rotation[0], rotation[1], rotation[2]);
+  m.makeRotationFromEuler(euler);
+  m.scale(new THREE.Vector3(-1, 1, 1));
+  return m;
+}
+
+// Transform position by matrix
+function transformPosition(x, y, z, matrix) {
+  const e = matrix.elements;
+  return {
+    x: e[0] * x + e[4] * y + e[8] * z + e[12],
+    y: e[1] * x + e[5] * y + e[9] * z + e[13],
+    z: e[2] * x + e[6] * y + e[10] * z + e[14]
+  };
+}
+
+// Transform rotation quaternion by matrix rotation
+function transformRotation(qw, qx, qy, qz, matrix) {
+  // Extract rotation quaternion from matrix
+  const matQuat = new THREE.Quaternion();
+  matQuat.setFromRotationMatrix(matrix);
+  
+  // Original quaternion
+  const origQuat = new THREE.Quaternion(qx, qy, qz, qw);
+  
+  // Combine: matrix rotation * original rotation
+  matQuat.multiply(origQuat);
+  
+  return { w: matQuat.w, x: matQuat.x, y: matQuat.y, z: matQuat.z };
+}
+
+/**
+ * MergedGaussianSplats - Loads multiple faces, merges into one mesh, sorts by distance from origin
+ * This ensures correct depth ordering for a viewer at center looking outward
+ */
+function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orientToCenter = false }) {
+  const meshRef = useRef();
+  const [mergedData, setMergedData] = useState(null);
+  const { camera, size } = useThree();
+  
+  // Load and merge all enabled faces
+  useEffect(() => {
+    const loadAndMerge = async () => {
+      const faceNames = Object.entries(enabledFaces)
+        .filter(([_, enabled]) => enabled)
+        .map(([face]) => face);
+      
+      if (faceNames.length === 0) {
+        setMergedData(null);
+        return;
+      }
+      
+      console.log(`Loading faces: ${faceNames.join(', ')}`);
+      
+      // Load all PLY files in parallel
+      const faceDataPromises = faceNames.map(async (face) => {
+        try {
+          const data = await loadPLY(`${basePath}input_${face}.ply`);
+          return { face, data };
+        } catch (e) {
+          console.warn(`Failed to load ${face}:`, e);
+          return null;
+        }
+      });
+      
+      const faceResults = (await Promise.all(faceDataPromises)).filter(Boolean);
+      
+      if (faceResults.length === 0) {
+        setMergedData(null);
+        return;
+      }
+      
+      // Count total splats
+      const totalCount = faceResults.reduce((sum, { data }) => sum + data.count, 0);
+      console.log(`Total splats across ${faceResults.length} faces: ${totalCount}`);
+      
+      // Allocate merged arrays
+      const positions = new Float32Array(totalCount * 3);
+      const colors = new Float32Array(totalCount * 3);
+      const opacities = new Float32Array(totalCount);
+      const scales = new Float32Array(totalCount * 3);
+      const rotations = new Float32Array(totalCount * 4);
+      const depths = new Float32Array(totalCount);
+      
+      // Merge all faces, transforming to world space
+      let offset = 0;
+      for (const { face, data } of faceResults) {
+        const matrix = buildFaceMatrix(face);
+        
+        for (let i = 0; i < data.count; i++) {
+          const idx = offset + i;
+          
+          // Transform position to world space
+          const localPos = {
+            x: data.positions[i * 3],
+            y: data.positions[i * 3 + 1],
+            z: data.positions[i * 3 + 2]
+          };
+          const worldPos = transformPosition(localPos.x, localPos.y, localPos.z, matrix);
+          
+          positions[idx * 3] = worldPos.x;
+          positions[idx * 3 + 1] = worldPos.y;
+          positions[idx * 3 + 2] = worldPos.z;
+          
+          // Compute distance from origin for sorting (squared, no sqrt needed)
+          depths[idx] = worldPos.x * worldPos.x + worldPos.y * worldPos.y + worldPos.z * worldPos.z;
+          
+          // Copy colors directly
+          colors[idx * 3] = data.colors[i * 3];
+          colors[idx * 3 + 1] = data.colors[i * 3 + 1];
+          colors[idx * 3 + 2] = data.colors[i * 3 + 2];
+          
+          opacities[idx] = data.opacities[i];
+          
+          // Copy scales directly (they don't need transformation for uniform scaling)
+          scales[idx * 3] = data.scales[i * 3];
+          scales[idx * 3 + 1] = data.scales[i * 3 + 1];
+          scales[idx * 3 + 2] = data.scales[i * 3 + 2];
+          
+          // Transform rotation to world space
+          const localRot = {
+            w: data.rotations[i * 4],
+            x: data.rotations[i * 4 + 1],
+            y: data.rotations[i * 4 + 2],
+            z: data.rotations[i * 4 + 3]
+          };
+          const worldRot = transformRotation(localRot.w, localRot.x, localRot.y, localRot.z, matrix);
+          
+          rotations[idx * 4] = worldRot.w;
+          rotations[idx * 4 + 1] = worldRot.x;
+          rotations[idx * 4 + 2] = worldRot.y;
+          rotations[idx * 4 + 3] = worldRot.z;
+        }
+        
+        offset += data.count;
+      }
+      
+      // Sort ALL splats by distance from origin (farthest first for back-to-front)
+      console.log('Sorting all splats by distance from origin...');
+      const indices = new Uint32Array(totalCount);
+      for (let i = 0; i < totalCount; i++) indices[i] = i;
+      
+      // Sort indices by depth (farthest first)
+      indices.sort((a, b) => depths[b] - depths[a]);
+      
+      // Reorder all arrays according to sorted indices
+      const sortedPositions = new Float32Array(totalCount * 3);
+      const sortedColors = new Float32Array(totalCount * 3);
+      const sortedOpacities = new Float32Array(totalCount);
+      const sortedScales = new Float32Array(totalCount * 3);
+      const sortedRotations = new Float32Array(totalCount * 4);
+      
+      for (let i = 0; i < totalCount; i++) {
+        const src = indices[i];
+        
+        sortedPositions[i * 3] = positions[src * 3];
+        sortedPositions[i * 3 + 1] = positions[src * 3 + 1];
+        sortedPositions[i * 3 + 2] = positions[src * 3 + 2];
+        
+        sortedColors[i * 3] = colors[src * 3];
+        sortedColors[i * 3 + 1] = colors[src * 3 + 1];
+        sortedColors[i * 3 + 2] = colors[src * 3 + 2];
+        
+        sortedOpacities[i] = opacities[src];
+        
+        sortedScales[i * 3] = scales[src * 3];
+        sortedScales[i * 3 + 1] = scales[src * 3 + 1];
+        sortedScales[i * 3 + 2] = scales[src * 3 + 2];
+        
+        sortedRotations[i * 4] = rotations[src * 4];
+        sortedRotations[i * 4 + 1] = rotations[src * 4 + 1];
+        sortedRotations[i * 4 + 2] = rotations[src * 4 + 2];
+        sortedRotations[i * 4 + 3] = rotations[src * 4 + 3];
+      }
+      
+      console.log('Merge and sort complete');
+      
+      setMergedData({
+        positions: sortedPositions,
+        colors: sortedColors,
+        opacities: sortedOpacities,
+        scales: sortedScales,
+        rotations: sortedRotations,
+        count: totalCount
+      });
+    };
+    
+    loadAndMerge();
+  }, [basePath, enabledFaces]);
+  
+  const { geometry, material } = useMemo(() => {
+    if (!mergedData) return { geometry: null, material: null };
+    
+    // Create instanced geometry for quads
+    const baseGeometry = new THREE.BufferGeometry();
+    const quadVertices = new Float32Array([
+      -1, -1, 0,
+       1, -1, 0,
+       1,  1, 0,
+      -1, -1, 0,
+       1,  1, 0,
+      -1,  1, 0
+    ]);
+    baseGeometry.setAttribute('position', new THREE.BufferAttribute(quadVertices, 3));
+    
+    const geometry = new THREE.InstancedBufferGeometry();
+    geometry.setAttribute('position', baseGeometry.getAttribute('position'));
+    
+    // Instance attributes (already in world space, sorted by depth)
+    geometry.setAttribute('splatCenter', new THREE.InstancedBufferAttribute(mergedData.positions, 3));
+    geometry.setAttribute('splatColor', new THREE.InstancedBufferAttribute(mergedData.colors, 3));
+    geometry.setAttribute('splatOpacity', new THREE.InstancedBufferAttribute(mergedData.opacities, 1));
+    geometry.setAttribute('splatScale', new THREE.InstancedBufferAttribute(mergedData.scales, 3));
+    geometry.setAttribute('splatRotation', new THREE.InstancedBufferAttribute(mergedData.rotations, 4));
+    
+    geometry.instanceCount = mergedData.count;
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 100);
+    
+    // Simplified shader - no frustum culling needed, positions are already in world space
+    const material = new THREE.ShaderMaterial({
+      vertexShader,
+      fragmentShader,
+      uniforms: {
+        viewport: { value: new THREE.Vector2(size.width, size.height) },
+        focal: { value: new THREE.Vector2(size.height / 2, size.height / 2) },
+        splatScaleMult: { value: splatScale },
+        cullMode: { value: 0 },  // No culling for merged splats
+        frustumDir: { value: new THREE.Vector3(0, 0, -1) },
+        frustumAngle: { value: Math.PI / 4 },
+        orientToCenter: { value: orientToCenter }
+      },
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      blending: THREE.CustomBlending,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
+      blendSrcAlpha: THREE.OneFactor,
+      blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+      side: THREE.DoubleSide
+    });
+    
+    return { geometry, material };
+  }, [mergedData, size, orientToCenter, splatScale]);
+  
+  useFrame(() => {
+    if (material && camera) {
+      material.uniforms.viewport.value.set(size.width, size.height);
+      material.uniforms.splatScaleMult.value = splatScale;
+      material.uniforms.orientToCenter.value = orientToCenter;
+      
+      const fovY = camera.fov * Math.PI / 180;
+      const fy = size.height / (2 * Math.tan(fovY / 2));
+      material.uniforms.focal.value.set(fy, fy);
+    }
+  });
+  
+  if (!geometry || !material) {
+    return null;
+  }
+  
+  // No rotation or scale on mesh - positions are already in world space
+  return (
+    <mesh 
+      ref={meshRef} 
+      geometry={geometry} 
+      material={material}
+    />
+  );
+}
+
 function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullMode = 0, face = 'front', orientToCenter = false }) {
   const meshRef = useRef();
   const [sortedData, setSortedData] = useState(null);
@@ -574,3 +859,4 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
 }
 
 export default GaussianSplatCloud;
+export { MergedGaussianSplats };

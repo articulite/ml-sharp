@@ -2,7 +2,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { Suspense, useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import GaussianSplatCloud from './components/GaussianSplats';
+import GaussianSplatCloud, { MergedGaussianSplats } from './components/GaussianSplats';
 import { FrustumVisualizer, FrustumWireframe } from './components/FrustumVisualizer';
 import GenerateDashboard from './components/GenerateDashboard';
 import './App.css';
@@ -182,6 +182,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
   const [cameraResetTrigger, setCameraResetTrigger] = useState(0);
   const [parallaxEnabled, setParallaxEnabled] = useState(false);
   const [orientToCenter, setOrientToCenter] = useState(false);
+  const [useMergedSplats, setUseMergedSplats] = useState(true);  // Use merged by default for correct depth
   const controlsRef = useRef();
 
   const checkFaces = async (basePath) => {
@@ -287,6 +288,18 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
               <p className="orient-hint">Face gaussians toward (0,0,0) instead of outward</p>
             </div>
 
+            <div className="merge-toggle">
+              <label className="face-toggle">
+                <input
+                  type="checkbox"
+                  checked={useMergedSplats}
+                  onChange={(e) => setUseMergedSplats(e.target.checked)}
+                />
+                <span className="toggle-label">Merged Depth Sort</span>
+              </label>
+              <p className="merge-hint">Sort all splats globally by distance from origin</p>
+            </div>
+
             <h2>Frustum Culling</h2>
             <div className="cull-mode-selector">
               {CULL_MODES.map(mode => (
@@ -353,19 +366,31 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
         <ambientLight intensity={0.5} />
         
         <Suspense fallback={<LoadingIndicator />}>
-          {availableFaces.map(face => (
-            enabledFaces[face] && (
-              <GaussianSplatCloud
-                key={splatKey(face)}
-                url={`${splatBasePath}input_${face}.ply`}
-                rotation={CUBE_FACE_ROTATIONS[face]}
-                splatScale={splatScale}
-                cullMode={cullMode}
-                face={face}
-                orientToCenter={orientToCenter}
-              />
-            )
-          ))}
+          {useMergedSplats ? (
+            // Single merged mesh with all faces - correct depth sorting
+            <MergedGaussianSplats
+              key={`merged-${refreshTrigger}-${splatBasePath}`}
+              basePath={splatBasePath}
+              enabledFaces={enabledFaces}
+              splatScale={splatScale}
+              orientToCenter={orientToCenter}
+            />
+          ) : (
+            // Separate meshes per face (may have depth issues)
+            availableFaces.map(face => (
+              enabledFaces[face] && (
+                <GaussianSplatCloud
+                  key={splatKey(face)}
+                  url={`${splatBasePath}input_${face}.ply`}
+                  rotation={CUBE_FACE_ROTATIONS[face]}
+                  splatScale={splatScale}
+                  cullMode={cullMode}
+                  face={face}
+                  orientToCenter={orientToCenter}
+                />
+              )
+            ))
+          )}
         </Suspense>
 
         {/* Frustum visualizations for enabled faces */}
