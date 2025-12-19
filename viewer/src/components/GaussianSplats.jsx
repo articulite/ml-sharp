@@ -217,12 +217,13 @@ const fragmentShader = `
 `;
 
 // Get frustum direction based on face
+// Directions match where gaussians actually end up after PLY rotation + scale transforms
 function getFrustumDirection(face) {
   switch (face) {
     case 'front':  return new THREE.Vector3(0, 0, -1);
     case 'back':   return new THREE.Vector3(0, 0, 1);
-    case 'left':   return new THREE.Vector3(-1, 0, 0);
-    case 'right':  return new THREE.Vector3(1, 0, 0);
+    case 'left':   return new THREE.Vector3(1, 0, 0);   // +X (gaussians end up here)
+    case 'right':  return new THREE.Vector3(-1, 0, 0);  // -X (gaussians end up here)
     case 'top':    return new THREE.Vector3(0, 1, 0);
     case 'bottom': return new THREE.Vector3(0, -1, 0);
     default:       return new THREE.Vector3(0, 0, -1);

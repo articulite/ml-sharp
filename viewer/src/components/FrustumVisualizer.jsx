@@ -53,12 +53,13 @@ function FrustumVisualizer({ direction = 'front', depth = 2.0, visible = true })
   }, [depth]);
   
   // Rotation to orient the frustum based on cube face direction
+  // These match where the gaussians actually end up after the PLY rotations
   const rotation = useMemo(() => {
     switch (direction) {
       case 'front':  return [0, 0, 0];                    // -Z
       case 'back':   return [0, Math.PI, 0];              // +Z
-      case 'left':   return [0, -Math.PI / 2, 0];         // -X
-      case 'right':  return [0, Math.PI / 2, 0];          // +X
+      case 'left':   return [0, Math.PI / 2, 0];          // +X (gaussians end up here)
+      case 'right':  return [0, -Math.PI / 2, 0];         // -X (gaussians end up here)
       case 'top':    return [Math.PI / 2, 0, 0];          // +Y
       case 'bottom': return [-Math.PI / 2, 0, 0];         // -Y
       default:       return [0, 0, 0];
@@ -110,8 +111,8 @@ function FrustumWireframe({ direction = 'front', depth = 2.0, visible = true }) 
     switch (direction) {
       case 'front':  return [0, 0, 0];
       case 'back':   return [0, Math.PI, 0];
-      case 'left':   return [0, -Math.PI / 2, 0];
-      case 'right':  return [0, Math.PI / 2, 0];
+      case 'left':   return [0, Math.PI / 2, 0];          // +X
+      case 'right':  return [0, -Math.PI / 2, 0];         // -X
       case 'top':    return [Math.PI / 2, 0, 0];
       case 'bottom': return [-Math.PI / 2, 0, 0];
       default:       return [0, 0, 0];
