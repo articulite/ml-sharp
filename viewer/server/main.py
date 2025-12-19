@@ -69,7 +69,7 @@ class PipelineProgress:
     def percent(self) -> float:
         if self.total_steps == 0:
             return 0.0
-        return (self.current_step / self.total_steps) * 100
+        return min((self.current_step / self.total_steps) * 100, 100.0)
 
 
 async def send_progress(job_id: str, progress: PipelineProgress):
@@ -244,11 +244,15 @@ async def run_predict(
     progress.message = "Model loaded successfully"
     await send_progress(progress.job_id, progress)
     
-    # Find cube face images
+    # Find cube face images (use set to avoid duplicates from case-insensitive matching)
     extensions = sharp_io.get_supported_image_extensions()
-    image_paths = []
+    image_paths_set = set()
     for ext in extensions:
-        image_paths.extend(list(cubefaces_path.glob(f"*{ext}")))
+        for p in cubefaces_path.glob(f"*{ext}"):
+            # Use resolve() to get canonical path, avoiding duplicates
+            image_paths_set.add(p.resolve())
+    
+    image_paths = list(image_paths_set)
     
     # Filter by face names
     if faces_to_process:
@@ -268,12 +272,20 @@ async def run_predict(
         progress.message = f"Generating splats for {image_path.stem} ({i + 1}/{len(image_paths)})"
         await send_progress(progress.job_id, progress)
         
-        image, _, f_px_from_exif = sharp_io.load_rgb(image_path)
+        # Load image directly (skip sharp_io.load_rgb to avoid EXIF warning since we compute focal length from FOV)
+        img_pil = Image.open(image_path)
+        image = np.array(img_pil)
+        if image.ndim == 2:
+            image = np.stack([image] * 3, axis=-1)
+        elif image.shape[-1] == 4:
+            image = image[..., :3]
+        
         height, width = image.shape[:2]
         
-        # Compute focal length from FOV
+        # Compute focal length from FOV (this is what the user set in the dashboard)
         size = min(width, height)
         f_px = size / (2 * np.tan(np.deg2rad(fov) / 2))
+        LOGGER.info(f"Using FOV {fov}° -> focal length {f_px:.2f}px for {image_path.stem}")
         
         # Preprocess
         image_pt = torch.from_numpy(image.copy()).float().to(device).permute(2, 0, 1) / 255.0
