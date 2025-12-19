@@ -3,6 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { loadPLY } from '../utils/plyLoader';
 
+// Simpler vertex shader - billboard quads facing camera
 const vertexShader = `
   precision highp float;
   
@@ -14,99 +15,44 @@ const vertexShader = `
   
   varying vec3 vColor;
   varying float vOpacity;
-  varying vec2 vPosition;
+  varying vec2 vUV;
   
   uniform vec2 viewport;
-  uniform vec2 focal;
-  
-  mat3 quatToMat3(vec4 q) {
-    float x = q.x, y = q.y, z = q.z, w = q.w;
-    return mat3(
-      1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - w * z), 2.0 * (x * z + w * y),
-      2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - w * x),
-      2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x * x + y * y)
-    );
-  }
+  uniform float focal;
   
   void main() {
     vColor = splatColor;
     vOpacity = splatOpacity;
-    vPosition = position.xy;
+    vUV = position.xy;
     
     // Transform center to view space
     vec4 viewCenter = modelViewMatrix * vec4(splatCenter, 1.0);
     
     // Skip splats behind camera
-    if (viewCenter.z > 0.0) {
+    if (viewCenter.z > -0.1) {
       gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
       return;
     }
     
-    // Build covariance matrix from rotation and scale
-    mat3 R = quatToMat3(splatRotation);
-    mat3 S = mat3(
-      splatScale.x, 0.0, 0.0,
-      0.0, splatScale.y, 0.0,
-      0.0, 0.0, splatScale.z
-    );
-    mat3 M = R * S;
-    mat3 Sigma = M * transpose(M);
+    // Use average scale for splat size (simplified spherical splats)
+    float avgScale = (splatScale.x + splatScale.y + splatScale.z) / 3.0;
     
-    // Transform to view space
-    mat3 viewRot = mat3(modelViewMatrix);
-    mat3 Sigma_view = viewRot * Sigma * transpose(viewRot);
+    // Project size to screen space
+    float projScale = focal * avgScale / (-viewCenter.z);
     
-    // Project to 2D
-    float z2 = viewCenter.z * viewCenter.z;
-    mat2 J = mat2(
-      focal.x / viewCenter.z, 0.0,
-      0.0, focal.y / viewCenter.z
-    );
+    // Clamp to reasonable size
+    projScale = clamp(projScale, 1.0, 500.0);
     
-    mat2 cov2D = J * mat2(Sigma_view[0][0], Sigma_view[0][1], 
-                          Sigma_view[1][0], Sigma_view[1][1]) * transpose(J);
+    // Billboard offset in screen space
+    vec2 offset = position.xy * projScale * 3.0;
     
-    // Add low-pass filter
-    cov2D[0][0] += 0.3;
-    cov2D[1][1] += 0.3;
+    // Project center
+    vec4 clipPos = projectionMatrix * viewCenter;
     
-    // Compute eigenvalues for extent
-    float a = cov2D[0][0];
-    float b = cov2D[0][1];
-    float c = cov2D[1][1];
-    float det = a * c - b * b;
-    float trace = a + c;
-    float discriminant = max(0.0, trace * trace / 4.0 - det);
-    float sqrtDisc = sqrt(discriminant);
-    float lambda1 = trace / 2.0 + sqrtDisc;
-    float lambda2 = trace / 2.0 - sqrtDisc;
+    // Add offset in clip space
+    clipPos.xy += offset * clipPos.w / viewport;
     
-    // Splat radius (3 sigma)
-    float radius = 3.0 * sqrt(max(lambda1, lambda2));
-    
-    // Compute eigenvectors for orientation
-    vec2 v1;
-    if (abs(b) > 0.0001) {
-      v1 = normalize(vec2(lambda1 - c, b));
-    } else {
-      v1 = vec2(1.0, 0.0);
-    }
-    vec2 v2 = vec2(-v1.y, v1.x);
-    
-    float s1 = 3.0 * sqrt(max(lambda1, 0.0001));
-    float s2 = 3.0 * sqrt(max(lambda2, 0.0001));
-    
-    // Transform quad vertex
-    vec2 offset = v1 * position.x * s1 + v2 * position.y * s2;
-    
-    // Project center to screen
-    vec4 projCenter = projectionMatrix * viewCenter;
-    vec2 screenCenter = projCenter.xy / projCenter.w;
-    
-    // Add offset in screen space
-    vec2 screenOffset = offset / viewport * 2.0;
-    
-    gl_Position = vec4(screenCenter + screenOffset, projCenter.z / projCenter.w, 1.0);
+    gl_Position = clipPos;
   }
 `;
 
@@ -115,15 +61,15 @@ const fragmentShader = `
   
   varying vec3 vColor;
   varying float vOpacity;
-  varying vec2 vPosition;
+  varying vec2 vUV;
   
   void main() {
     // Gaussian falloff
-    float d = dot(vPosition, vPosition);
-    if (d > 1.0) discard;
+    float d2 = dot(vUV, vUV);
+    if (d2 > 1.0) discard;
     
-    float alpha = exp(-0.5 * d * 9.0) * vOpacity;
-    if (alpha < 0.01) discard;
+    float alpha = exp(-d2 * 4.0) * vOpacity;
+    if (alpha < 0.005) discard;
     
     gl_FragColor = vec4(vColor, alpha);
   }
@@ -168,20 +114,21 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0] }) {
     
     geometry.instanceCount = splatData.count;
     
+    // Set bounding sphere for frustum culling
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 100);
+    
     const material = new THREE.ShaderMaterial({
       vertexShader,
       fragmentShader,
       uniforms: {
         viewport: { value: new THREE.Vector2(size.width, size.height) },
-        focal: { value: new THREE.Vector2(size.width, size.height) }
+        focal: { value: size.height / 2 }
       },
       transparent: true,
       depthWrite: false,
       depthTest: true,
-      blending: THREE.CustomBlending,
-      blendEquation: THREE.AddEquation,
-      blendSrc: THREE.SrcAlphaFactor,
-      blendDst: THREE.OneMinusSrcAlphaFactor
+      blending: THREE.NormalBlending,
+      side: THREE.DoubleSide
     });
     
     return { geometry, material };
@@ -194,8 +141,7 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0] }) {
       // Compute focal length from camera
       const fovY = camera.fov * Math.PI / 180;
       const fy = size.height / (2 * Math.tan(fovY / 2));
-      const fx = fy * camera.aspect;
-      material.uniforms.focal.value.set(fx, fy);
+      material.uniforms.focal.value = fy;
     }
   });
   
@@ -204,9 +150,14 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0] }) {
   }
   
   return (
-    <mesh ref={meshRef} geometry={geometry} material={material} rotation={rotation} />
+    <mesh 
+      ref={meshRef} 
+      geometry={geometry} 
+      material={material} 
+      rotation={rotation}
+      scale={[-1, 1, 1]}
+    />
   );
 }
 
 export default GaussianSplatCloud;
-

@@ -29,9 +29,9 @@ export async function loadPLY(url) {
   for (let i = 0; i < vertexCount; i++) {
     const offset = i * vertexSize;
     
-    // Position (x, y, z) - flip Y to correct for coordinate system
+    // Position (x, y, z)
     positions[i * 3 + 0] = dataView.getFloat32(offset + 0, true);
-    positions[i * 3 + 1] = -dataView.getFloat32(offset + 4, true);
+    positions[i * 3 + 1] = dataView.getFloat32(offset + 4, true);
     positions[i * 3 + 2] = dataView.getFloat32(offset + 8, true);
     
     // Color from spherical harmonics DC component (f_dc_0, f_dc_1, f_dc_2)
@@ -50,17 +50,16 @@ export async function loadPLY(url) {
     scales[i * 3 + 1] = Math.exp(dataView.getFloat32(offset + 32, true));
     scales[i * 3 + 2] = Math.exp(dataView.getFloat32(offset + 36, true));
     
-    // Rotation quaternion (w, x, y, z) - normalize and flip Y axis
+    // Rotation quaternion (w, x, y, z) - normalize it
     const qw = dataView.getFloat32(offset + 40, true);
     const qx = dataView.getFloat32(offset + 44, true);
     const qy = dataView.getFloat32(offset + 48, true);
     const qz = dataView.getFloat32(offset + 52, true);
     const qlen = Math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
-    // Flip Y axis: negate x and z components of quaternion
     rotations[i * 4 + 0] = qw / qlen;
-    rotations[i * 4 + 1] = -qx / qlen;
+    rotations[i * 4 + 1] = qx / qlen;
     rotations[i * 4 + 2] = qy / qlen;
-    rotations[i * 4 + 3] = -qz / qlen;
+    rotations[i * 4 + 3] = qz / qlen;
   }
   
   return {
@@ -105,4 +104,3 @@ function parseHeader(headerText) {
   
   return { vertexCount };
 }
-

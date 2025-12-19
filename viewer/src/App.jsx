@@ -5,13 +5,14 @@ import GaussianSplatCloud from './components/GaussianSplats';
 import './App.css';
 
 // Cube face orientations (Euler angles in radians)
+// Base 180° X rotation is baked in to correct coordinate system
 const CUBE_FACE_ROTATIONS = {
-  front:  [0, 0, 0],
-  back:   [0, Math.PI, 0],
-  left:   [0, Math.PI / 2, 0],
-  right:  [0, -Math.PI / 2, 0],
-  top:    [-Math.PI / 2, 0, 0],
-  bottom: [Math.PI / 2, 0, 0],
+  front:  [Math.PI, 0, 0],
+  back:   [Math.PI, Math.PI, 0],
+  left:   [Math.PI, Math.PI / 2, 0],
+  right:  [Math.PI, -Math.PI / 2, 0],
+  top:    [Math.PI / 2, 0, 0],
+  bottom: [-Math.PI / 2, 0, 0],
 };
 
 const SPLAT_BASE_PATH = '/splats/';
