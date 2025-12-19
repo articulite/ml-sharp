@@ -197,7 +197,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
   const [parallaxEnabled, setParallaxEnabled] = useState(false);
   const [orientToCenter, setOrientToCenter] = useState(false);
   const [useMergedSplats, setUseMergedSplats] = useState(true);  // Use merged by default for correct depth
-  const [viewFov, setViewFov] = useState(60);
+  const [viewFov, setViewFov] = useState(100);
   const controlsRef = useRef();
 
   const checkFaces = async (basePath) => {
@@ -387,7 +387,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
       </div>
 
       <Canvas
-        camera={{ position: [0, 0, 3], fov: 60 }}
+        camera={{ position: [0, 0, 3], fov: 100 }}
         gl={{ antialias: true, alpha: true }}
         className="splat-canvas"
       >
