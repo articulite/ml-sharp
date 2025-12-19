@@ -190,14 +190,14 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
   const [loading, setLoading] = useState(true);
   const [splatScale, setSplatScale] = useState(1.0);
   const [cullMode, setCullMode] = useState(0);
-  const [showFrustums, setShowFrustums] = useState(true);
+  const [showFrustums, setShowFrustums] = useState(false);
   const [frustumDepth, setFrustumDepth] = useState(2.0);
   const [panelOpen, setPanelOpen] = useState(true);
   const [cameraResetTrigger, setCameraResetTrigger] = useState(0);
-  const [parallaxEnabled, setParallaxEnabled] = useState(false);
+  const [parallaxEnabled, setParallaxEnabled] = useState(true);  // Parallax on by default
   const [orientMode, setOrientMode] = useState(2);  // 0=stored, 1=to center, 2=billboard (camera-facing)
   const [useMergedSplats, setUseMergedSplats] = useState(true);  // Use merged by default for correct depth
-  const [viewFov, setViewFov] = useState(100);
+  const [viewFov, setViewFov] = useState(100);  // Narrower FOV for more zoom
   const controlsRef = useRef();
 
   const checkFaces = async (basePath) => {
@@ -407,7 +407,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
       </div>
 
       <Canvas
-        camera={{ position: [0, 0, 3], fov: 100 }}
+        camera={{ position: [0, 0, 0], fov: 45 }}
         gl={{ antialias: true, alpha: true }}
         className="splat-canvas"
       >
@@ -468,8 +468,9 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
           ref={controlsRef}
           enableDamping 
           dampingFactor={0.05}
-          minDistance={0.1}
+          minDistance={0}
           maxDistance={50}
+          target={[0, 0, -0.001]}
         />
       </Canvas>
     </div>
