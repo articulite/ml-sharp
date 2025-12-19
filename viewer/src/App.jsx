@@ -14,8 +14,8 @@ const CUBE_FACE_ROTATIONS = {
   back:   [Math.PI, Math.PI, 0],
   left:   [Math.PI, Math.PI / 2, 0],
   right:  [Math.PI, -Math.PI / 2, 0],
-  top:    [Math.PI / 2, 0, 0],
-  bottom: [-Math.PI / 2, 0, 0],
+  top:    [-Math.PI / 2, 0, 0],
+  bottom: [Math.PI / 2, 0, 0],
 };
 
 const SPLAT_BASE_PATH = '/splats/';
