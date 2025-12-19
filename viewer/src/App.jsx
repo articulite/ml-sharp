@@ -46,6 +46,20 @@ function CameraReset({ trigger, controlsRef }) {
   return null;
 }
 
+// Camera FOV controller
+function CameraFov({ fov }) {
+  const { camera } = useThree();
+  
+  useEffect(() => {
+    if (camera.fov !== fov) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+  }, [fov, camera]);
+  
+  return null;
+}
+
 // Parallax animation - moves camera in tight circle while maintaining look direction
 function ParallaxAnimation({ enabled, radius = 0.05, speed = 0.5, controlsRef }) {
   const { camera } = useThree();
@@ -183,6 +197,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
   const [parallaxEnabled, setParallaxEnabled] = useState(false);
   const [orientToCenter, setOrientToCenter] = useState(false);
   const [useMergedSplats, setUseMergedSplats] = useState(true);  // Use merged by default for correct depth
+  const [viewFov, setViewFov] = useState(60);
   const controlsRef = useRef();
 
   const checkFaces = async (basePath) => {
@@ -272,6 +287,20 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
               step="0.1"
               value={splatScale}
                   onChange={(e) => setSplatScale(parseFloat(e.target.value))}
+                />
+              </label>
+            </div>
+
+            <div className="fov-slider">
+              <label>
+                <span>View FOV: {viewFov}°</span>
+                <input
+                  type="range"
+                  min="30"
+                  max="120"
+                  step="5"
+                  value={viewFov}
+                  onChange={(e) => setViewFov(parseInt(e.target.value))}
                 />
               </label>
             </div>
@@ -413,6 +442,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
         
         <WASDControls speed={0.05} controlsRef={controlsRef} />
         <CameraReset trigger={cameraResetTrigger} controlsRef={controlsRef} />
+        <CameraFov fov={viewFov} />
         <ParallaxAnimation enabled={parallaxEnabled} controlsRef={controlsRef} />
         <OrbitControls 
           ref={controlsRef}
