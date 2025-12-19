@@ -459,7 +459,8 @@ async def run_predict(
 ) -> dict:
     """Run Gaussian splat prediction with progress updates.
     
-    Uses cached model for fast inference and processes all faces efficiently.
+    Uses cached model for fast inference, processes faces sequentially
+    for better progress reporting and to avoid GPU memory pressure.
     """
     from sharp.utils import io as sharp_io
     
@@ -492,25 +493,33 @@ async def run_predict(
     output_path.mkdir(parents=True, exist_ok=True)
     splats_output_path.mkdir(parents=True, exist_ok=True)
     
-    progress.message = f"Generating splats for {len(image_paths)} faces..."
-    await send_progress(progress.job_id, progress)
-    
-    # Run batch prediction in thread pool to not block the event loop
+    # Process faces sequentially for better progress reporting
+    # and to avoid overloading GPU memory
     loop = asyncio.get_event_loop()
-    generated_splats = await loop.run_in_executor(
-        INFERENCE_POOL,
-        _predict_batch_sync,
-        model,
-        device,
-        image_paths,
-        fov,
-        output_path,
-        splats_output_path,
-        progress.job_id,
-    )
+    generated_splats = []
     
-    # Update progress for all processed faces
-    progress.current_step += len(image_paths)
+    for i, image_path in enumerate(image_paths):
+        face_name = image_path.stem.replace("input_", "")
+        progress.message = f"Generating splat for {face_name} ({i + 1}/{len(image_paths)})"
+        await send_progress(progress.job_id, progress)
+        
+        # Run single image prediction in thread pool
+        result = await loop.run_in_executor(
+            INFERENCE_POOL,
+            _predict_single_image_sync,
+            model,
+            device,
+            image_path,
+            fov,
+            output_path,
+            splats_output_path,
+            progress.job_id,
+        )
+        
+        generated_splats.append(result)
+        progress.current_step += 1
+        await send_progress(progress.job_id, progress)
+    
     progress.message = f"Generated {len(generated_splats)} splat files"
     await send_progress(progress.job_id, progress)
     
