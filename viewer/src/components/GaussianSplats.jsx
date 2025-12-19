@@ -19,6 +19,7 @@ const vertexShader = `
   
   uniform vec2 viewport;
   uniform float focal;
+  uniform float splatScaleMult;
   
   void main() {
     vColor = splatColor;
@@ -34,17 +35,17 @@ const vertexShader = `
       return;
     }
     
-    // Use average scale for splat size (simplified spherical splats)
-    float avgScale = (splatScale.x + splatScale.y + splatScale.z) / 3.0;
+    // Use max scale for splat size to ensure proper coverage
+    float maxScale = max(splatScale.x, max(splatScale.y, splatScale.z));
     
     // Project size to screen space
-    float projScale = focal * avgScale / (-viewCenter.z);
+    float projScale = focal * maxScale * splatScaleMult / (-viewCenter.z);
     
     // Clamp to reasonable size
-    projScale = clamp(projScale, 1.0, 500.0);
+    projScale = clamp(projScale, 2.0, 2048.0);
     
     // Billboard offset in screen space
-    vec2 offset = position.xy * projScale * 3.0;
+    vec2 offset = position.xy * projScale;
     
     // Project center
     vec4 clipPos = projectionMatrix * viewCenter;
@@ -75,7 +76,7 @@ const fragmentShader = `
   }
 `;
 
-function GaussianSplatCloud({ url, rotation = [0, 0, 0] }) {
+function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 6.0 }) {
   const meshRef = useRef();
   const [splatData, setSplatData] = useState(null);
   const { camera, size } = useThree();
@@ -102,8 +103,7 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0] }) {
     baseGeometry.setAttribute('position', new THREE.BufferAttribute(quadVertices, 3));
     
     const geometry = new THREE.InstancedBufferGeometry();
-    geometry.index = baseGeometry.index;
-    geometry.attributes.position = baseGeometry.attributes.position;
+    geometry.setAttribute('position', baseGeometry.getAttribute('position'));
     
     // Instance attributes
     geometry.setAttribute('splatCenter', new THREE.InstancedBufferAttribute(splatData.positions, 3));
@@ -122,7 +122,8 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0] }) {
       fragmentShader,
       uniforms: {
         viewport: { value: new THREE.Vector2(size.width, size.height) },
-        focal: { value: size.height / 2 }
+        focal: { value: size.height / 2 },
+        splatScaleMult: { value: splatScale }
       },
       transparent: true,
       depthWrite: false,
@@ -137,6 +138,7 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0] }) {
   useFrame(() => {
     if (material && camera) {
       material.uniforms.viewport.value.set(size.width, size.height);
+      material.uniforms.splatScaleMult.value = splatScale;
       
       // Compute focal length from camera
       const fovY = camera.fov * Math.PI / 180;

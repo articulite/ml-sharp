@@ -103,6 +103,7 @@ function SplatViewer() {
   const [availableFaces, setAvailableFaces] = useState([]);
   const [enabledFaces, setEnabledFaces] = useState({});
   const [loading, setLoading] = useState(true);
+  const [splatScale, setSplatScale] = useState(6.0);
 
   useEffect(() => {
     // Check which splat files are available
@@ -163,6 +164,20 @@ function SplatViewer() {
         {availableFaces.length === 0 && (
           <p className="no-faces-message">No splat files found in /splats/</p>
         )}
+        
+        <div className="scale-slider">
+          <label>
+            <span>Splat Scale: {splatScale.toFixed(1)}</span>
+            <input
+              type="range"
+              min="0.5"
+              max="20"
+              step="0.1"
+              value={splatScale}
+              onChange={(e) => setSplatScale(parseFloat(e.target.value))}
+            />
+          </label>
+        </div>
       </div>
 
       <Canvas
@@ -180,6 +195,7 @@ function SplatViewer() {
                 key={face}
                 url={`${SPLAT_BASE_PATH}input_${face}.ply`}
                 rotation={CUBE_FACE_ROTATIONS[face]}
+                splatScale={splatScale}
               />
             )
           ))}
