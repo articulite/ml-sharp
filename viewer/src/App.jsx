@@ -103,7 +103,7 @@ function SplatViewer() {
   const [availableFaces, setAvailableFaces] = useState([]);
   const [enabledFaces, setEnabledFaces] = useState({});
   const [loading, setLoading] = useState(true);
-  const [splatScale, setSplatScale] = useState(6.0);
+  const [splatScale, setSplatScale] = useState(1.0);
 
   useEffect(() => {
     // Check which splat files are available
