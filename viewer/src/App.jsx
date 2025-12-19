@@ -18,7 +18,7 @@ const CUBE_FACE_ROTATIONS = {
   bottom: [Math.PI / 2, 0, 0],
 };
 
-const SPLAT_BASE_PATH = '/splats/';
+const DEFAULT_SPLAT_PATH = '/splats/';
 
 // Culling mode descriptions
 const CULL_MODES = [
@@ -170,7 +170,7 @@ function LoadingIndicator() {
   );
 }
 
-function SplatViewer({ refreshTrigger }) {
+function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
   const [availableFaces, setAvailableFaces] = useState([]);
   const [enabledFaces, setEnabledFaces] = useState({});
   const [loading, setLoading] = useState(true);
@@ -183,14 +183,14 @@ function SplatViewer({ refreshTrigger }) {
   const [parallaxEnabled, setParallaxEnabled] = useState(false);
   const controlsRef = useRef();
 
-  const checkFaces = async () => {
+  const checkFaces = async (basePath) => {
     const faces = ['front', 'back', 'left', 'right', 'top', 'bottom'];
     const available = [];
     const enabled = {};
 
     for (const face of faces) {
       try {
-        const response = await fetch(`${SPLAT_BASE_PATH}input_${face}.ply`, { method: 'HEAD' });
+        const response = await fetch(`${basePath}input_${face}.ply`, { method: 'HEAD' });
         if (response.ok) {
           available.push(face);
           // Default: only enable 'front' face on initial load
@@ -207,23 +207,23 @@ function SplatViewer({ refreshTrigger }) {
   };
 
   useEffect(() => {
-    checkFaces();
+    checkFaces(splatBasePath);
   }, []);
 
-  // Re-check faces when refreshTrigger changes (after generation)
+  // Re-check faces when refreshTrigger or splatBasePath changes
   useEffect(() => {
     if (refreshTrigger > 0) {
       setLoading(true);
-      checkFaces();
+      checkFaces(splatBasePath);
     }
-  }, [refreshTrigger]);
+  }, [refreshTrigger, splatBasePath]);
 
   const toggleFace = (face) => {
     setEnabledFaces(prev => ({ ...prev, [face]: !prev[face] }));
   };
 
-  // Key includes cullMode so components reinitialize when culling mode changes
-  const splatKey = (face) => `${face}-cull-${cullMode}-${refreshTrigger}`;
+  // Key includes cullMode and basePath so components reinitialize when they change
+  const splatKey = (face) => `${face}-cull-${cullMode}-${refreshTrigger}-${splatBasePath}`;
 
   if (loading) {
     return (
@@ -344,7 +344,7 @@ function SplatViewer({ refreshTrigger }) {
             enabledFaces[face] && (
               <GaussianSplatCloud
                 key={splatKey(face)}
-                url={`${SPLAT_BASE_PATH}input_${face}.ply`}
+                url={`${splatBasePath}input_${face}.ply`}
                 rotation={CUBE_FACE_ROTATIONS[face]}
                 splatScale={splatScale}
                 cullMode={cullMode}
@@ -390,8 +390,15 @@ function SplatViewer({ refreshTrigger }) {
 function App() {
   const [activeTab, setActiveTab] = useState('generate');
   const [splatRefreshTrigger, setSplatRefreshTrigger] = useState(0);
+  const [splatBasePath, setSplatBasePath] = useState('/splats/');
 
-  const handleSplatsGenerated = () => {
+  const handleSplatsGenerated = (splatsData) => {
+    // If splatsData contains a job path, use that; otherwise use default
+    if (splatsData?.jobId) {
+      setSplatBasePath(`/generated/${splatsData.jobId}/splats/`);
+    } else {
+      setSplatBasePath('/splats/');
+    }
     // Trigger refresh of the viewer when new splats are generated
     setSplatRefreshTrigger(prev => prev + 1);
   };
@@ -427,7 +434,7 @@ function App() {
           <GenerateDashboard onSplatsGenerated={handleSplatsGenerated} />
         )}
         {activeTab === 'viewer' && (
-          <SplatViewer refreshTrigger={splatRefreshTrigger} />
+          <SplatViewer refreshTrigger={splatRefreshTrigger} splatBasePath={splatBasePath} />
         )}
       </main>
     </div>

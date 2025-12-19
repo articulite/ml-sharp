@@ -8,6 +8,146 @@ const WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${wi
 
 const CUBE_FACES = ['front', 'back', 'left', 'right', 'top', 'bottom'];
 
+function formatDate(timestamp) {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diff = now - date;
+  
+  // Less than 1 minute
+  if (diff < 60000) return 'Just now';
+  // Less than 1 hour
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  // Less than 24 hours
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  // Less than 7 days
+  if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
+  // Otherwise show date
+  return date.toLocaleDateString();
+}
+
+function JobHistory({ onLoadJob, onDeleteJob, serverOnline }) {
+  const [jobs, setJobs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(true);
+  const [deletingId, setDeletingId] = useState(null);
+
+  const fetchJobs = useCallback(async () => {
+    if (!serverOnline) {
+      setLoading(false);
+      return;
+    }
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/jobs`);
+      if (response.ok) {
+        const data = await response.json();
+        setJobs(data.jobs || []);
+      }
+    } catch (e) {
+      console.error('Failed to fetch jobs:', e);
+    }
+    setLoading(false);
+  }, [serverOnline]);
+
+  useEffect(() => {
+    fetchJobs();
+  }, [fetchJobs]);
+
+  const handleDelete = async (e, jobId) => {
+    e.stopPropagation();
+    if (!confirm('Delete this job and all its files?')) return;
+    
+    setDeletingId(jobId);
+    try {
+      const response = await fetch(`${API_BASE}/api/jobs/${jobId}`, { method: 'DELETE' });
+      if (response.ok) {
+        setJobs(prev => prev.filter(j => j.job_id !== jobId));
+        if (onDeleteJob) onDeleteJob(jobId);
+      }
+    } catch (e) {
+      console.error('Failed to delete job:', e);
+    }
+    setDeletingId(null);
+  };
+
+  if (loading) {
+    return (
+      <div className="section job-history-section">
+        <h3>Previous Jobs</h3>
+        <div className="job-history-loading">Loading...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="section job-history-section">
+      <div className="job-history-header" onClick={() => setExpanded(!expanded)}>
+        <h3>Previous Jobs ({jobs.length})</h3>
+        <button className="expand-toggle">{expanded ? '▼' : '▶'}</button>
+      </div>
+      
+      {expanded && (
+        <div className="job-history-list">
+          {jobs.length === 0 ? (
+            <div className="no-jobs-message">
+              No previous jobs found. Generate your first cubemap!
+            </div>
+          ) : (
+            jobs.map(job => (
+              <div 
+                key={job.job_id} 
+                className="job-card"
+                onClick={() => onLoadJob(job.job_id)}
+              >
+                <div className="job-thumbnail">
+                  {job.thumbnail_url ? (
+                    <img src={`${API_BASE}${job.thumbnail_url}`} alt="Input" />
+                  ) : (
+                    <div className="job-thumbnail-placeholder">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <path d="M21 15l-5-5L5 21" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+                <div className="job-info">
+                  <div className="job-date">{formatDate(job.created_at)}</div>
+                  <div className="job-stats">
+                    <span className="job-stat">
+                      <span className="stat-icon">◫</span> {job.cubeface_count}
+                    </span>
+                    {job.has_splats && (
+                      <span className="job-stat splat-stat">
+                        <span className="stat-icon">◆</span> {job.splat_count}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button 
+                  className="job-delete-btn"
+                  onClick={(e) => handleDelete(e, job.job_id)}
+                  disabled={deletingId === job.job_id}
+                  title="Delete job"
+                >
+                  {deletingId === job.job_id ? '...' : '×'}
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      
+      {expanded && jobs.length > 0 && (
+        <button className="refresh-jobs-btn" onClick={fetchJobs}>
+          Refresh
+        </button>
+      )}
+    </div>
+  );
+}
+
 function generateJobId() {
   return `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
@@ -67,6 +207,8 @@ function GenerateDashboard({ onSplatsGenerated }) {
   const [progress, setProgress] = useState({ percent: 0, status: 'idle', message: '' });
   const [results, setResults] = useState(null);
   const [serverOnline, setServerOnline] = useState(false);
+  const [loadedJobId, setLoadedJobId] = useState(null);
+  const [jobHistoryKey, setJobHistoryKey] = useState(0);
   
   const wsRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -86,6 +228,56 @@ function GenerateDashboard({ onSplatsGenerated }) {
     const interval = setInterval(checkHealth, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  // Load a previous job
+  const handleLoadJob = useCallback(async (jobId) => {
+    try {
+      setProgress({ percent: 50, status: 'running', message: 'Loading job...' });
+      
+      const response = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+      if (!response.ok) throw new Error('Failed to load job');
+      
+      const data = await response.json();
+      
+      // Set the preview from the input image
+      if (data.input_image_url) {
+        setPreview(`${API_BASE}${data.input_image_url}`);
+      }
+      
+      // Clear file since we're loading from history
+      setFile(null);
+      setLoadedJobId(jobId);
+      
+      // Set the results
+      setResults({
+        cubefaces: data.cubefaces,
+        splats: data.splats,
+      });
+      
+      // Update progress to show loaded state
+      setProgress({ percent: 100, status: 'completed', message: `Loaded job from ${formatDate(data.created_at)}` });
+      
+      // If there are splats, notify the viewer with the job path
+      if (data.splats?.splats?.length > 0 && onSplatsGenerated) {
+        onSplatsGenerated({ ...data.splats, jobId });
+      }
+      
+    } catch (e) {
+      console.error('Failed to load job:', e);
+      setProgress({ percent: 0, status: 'error', message: 'Failed to load job' });
+    }
+  }, [onSplatsGenerated]);
+
+  // Handle job deletion
+  const handleDeleteJob = useCallback((deletedJobId) => {
+    if (loadedJobId === deletedJobId) {
+      // Clear current view if the loaded job was deleted
+      setResults(null);
+      setPreview(null);
+      setLoadedJobId(null);
+      setProgress({ percent: 0, status: 'idle', message: '' });
+    }
+  }, [loadedJobId]);
 
   const handleFileSelect = useCallback((e) => {
     const selectedFile = e.target.files?.[0];
@@ -150,6 +342,9 @@ function GenerateDashboard({ onSplatsGenerated }) {
           setIsProcessing(false);
           if (data.results) {
             setResults(data.results);
+            setLoadedJobId(null); // Clear loaded job since this is a new one
+            // Refresh job history
+            setJobHistoryKey(prev => prev + 1);
             if (data.results.splats && onSplatsGenerated) {
               onSplatsGenerated(data.results.splats);
             }
@@ -326,6 +521,14 @@ function GenerateDashboard({ onSplatsGenerated }) {
               )}
             </div>
           )}
+
+          {/* Job History */}
+          <JobHistory 
+            key={jobHistoryKey}
+            onLoadJob={handleLoadJob}
+            onDeleteJob={handleDeleteJob}
+            serverOnline={serverOnline}
+          />
         </div>
 
         <div className="dashboard-right">

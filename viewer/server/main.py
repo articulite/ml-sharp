@@ -658,13 +658,148 @@ async def process_pipeline(
         }
 
 
-@app.get("/generated/{job_id}/{subdir}/{filename}")
-async def serve_generated(job_id: str, subdir: str, filename: str):
-    """Serve generated output files."""
-    file_path = OUTPUT_DIR / job_id / subdir / filename
+@app.api_route("/generated/{job_id}/{filename:path}", methods=["GET", "HEAD"])
+async def serve_generated(job_id: str, filename: str):
+    """Serve generated output files (handles both root and subdirectory files)."""
+    file_path = OUTPUT_DIR / job_id / filename
     if file_path.exists():
         return FileResponse(file_path)
     return {"error": "File not found"}
+
+
+@app.get("/api/jobs")
+async def list_jobs():
+    """List all previous jobs with metadata."""
+    from urllib.parse import quote
+    
+    jobs = []
+    
+    if not OUTPUT_DIR.exists():
+        return {"jobs": []}
+    
+    for job_dir in OUTPUT_DIR.iterdir():
+        if not job_dir.is_dir() or not job_dir.name.startswith("job_"):
+            continue
+        
+        job_id = job_dir.name
+        
+        # Find the original input image
+        input_image = None
+        thumbnail_url = None
+        for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+            candidates = list(job_dir.glob(f"*{ext}"))
+            # Exclude cubeface outputs
+            candidates = [c for c in candidates if not c.stem.startswith("input_")]
+            if candidates:
+                input_image = candidates[0].name
+                # URL-encode the filename to handle special characters
+                thumbnail_url = f"/generated/{job_id}/{quote(input_image)}"
+                break
+        
+        # Count outputs
+        cubefaces_dir = job_dir / "cubefaces"
+        splats_dir = job_dir / "splats"
+        
+        cubeface_count = len(list(cubefaces_dir.glob("*.png"))) if cubefaces_dir.exists() else 0
+        splat_count = len(list(splats_dir.glob("*.ply"))) if splats_dir.exists() else 0
+        
+        # Get creation time from job_id (timestamp is second part)
+        try:
+            timestamp = int(job_id.split("_")[1])
+            created_at = timestamp
+        except (IndexError, ValueError):
+            created_at = int(job_dir.stat().st_mtime * 1000)
+        
+        jobs.append({
+            "job_id": job_id,
+            "created_at": created_at,
+            "input_image": input_image,
+            "thumbnail_url": thumbnail_url,
+            "cubeface_count": cubeface_count,
+            "splat_count": splat_count,
+            "has_splats": splat_count > 0,
+        })
+    
+    # Sort by creation time, newest first
+    jobs.sort(key=lambda j: j["created_at"], reverse=True)
+    
+    return {"jobs": jobs}
+
+
+@app.get("/api/jobs/{job_id}")
+async def get_job(job_id: str):
+    """Get full details for a specific job."""
+    from urllib.parse import quote
+    
+    job_dir = OUTPUT_DIR / job_id
+    if not job_dir.exists():
+        return {"error": "Job not found"}
+    
+    # Find input image
+    input_image = None
+    input_image_url = None
+    for ext in [".png", ".jpg", ".jpeg", ".webp"]:
+        candidates = list(job_dir.glob(f"*{ext}"))
+        candidates = [c for c in candidates if not c.stem.startswith("input_")]
+        if candidates:
+            input_image = candidates[0].name
+            input_image_url = f"/generated/{job_id}/{quote(input_image)}"
+            break
+    
+    # Get cubefaces
+    cubefaces = []
+    cubefaces_dir = job_dir / "cubefaces"
+    if cubefaces_dir.exists():
+        for f in sorted(cubefaces_dir.glob("*.png")):
+            face_name = f.stem.replace("input_", "")
+            cubefaces.append({
+                "name": face_name,
+                "filename": f.name,
+                "url": f"/generated/{job_id}/cubefaces/{f.name}",
+            })
+    
+    # Get splats
+    splats = []
+    splats_dir = job_dir / "splats"
+    if splats_dir.exists():
+        for f in sorted(splats_dir.glob("*.ply")):
+            splats.append({
+                "name": f.stem,
+                "filename": f.name,
+                "url": f"/generated/{job_id}/splats/{f.name}",
+                "viewer_url": f"/splats/{f.name}",
+            })
+    
+    # Get timestamp
+    try:
+        timestamp = int(job_id.split("_")[1])
+    except (IndexError, ValueError):
+        timestamp = int(job_dir.stat().st_mtime * 1000)
+    
+    return {
+        "job_id": job_id,
+        "created_at": timestamp,
+        "input_image": input_image,
+        "input_image_url": input_image_url,
+        "cubefaces": {"faces": cubefaces},
+        "splats": {"splats": splats},
+    }
+
+
+@app.delete("/api/jobs/{job_id}")
+async def delete_job(job_id: str):
+    """Delete a job and all its files."""
+    import shutil
+    
+    job_dir = OUTPUT_DIR / job_id
+    if not job_dir.exists():
+        return {"error": "Job not found"}
+    
+    try:
+        shutil.rmtree(job_dir)
+        return {"success": True, "message": f"Job {job_id} deleted"}
+    except Exception as e:
+        return {"error": f"Failed to delete job: {e}"}
 
 
 @app.get("/api/jobs/{job_id}/files")
