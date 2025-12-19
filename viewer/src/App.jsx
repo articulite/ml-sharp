@@ -210,8 +210,8 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH }) {
         const response = await fetch(`${basePath}input_${face}.ply`, { method: 'HEAD' });
         if (response.ok) {
           available.push(face);
-          // Default: only enable 'front' face on initial load
-          enabled[face] = (face === 'front');
+          // Default: enable all faces except top and bottom
+          enabled[face] = (face !== 'top' && face !== 'bottom');
         }
       } catch {
         // File not available
