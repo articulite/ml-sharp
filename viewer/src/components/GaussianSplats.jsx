@@ -36,6 +36,9 @@ const vertexShader = `
   uniform float frustumAngle; // Half angle in radians (50° for 100° FOV)
   uniform int orientMode;  // 0=stored rotation, 1=orient to center, 2=billboard to camera
   uniform vec3 cameraWorldPos;  // Camera position for billboard mode
+  uniform float maxSplatDistance;  // Maximum distance of any splat from origin
+  uniform float distanceScaleMax;  // Scale multiplier at max distance (default 3.0)
+  uniform float distanceScalePower;  // Power curve exponent (< 1 = more aggressive early, default 0.5)
   
   // Build rotation matrix from quaternion (w, x, y, z)
   mat3 quatToMat3(vec4 q) {
@@ -122,7 +125,37 @@ const vertexShader = `
     // Build 3D covariance in view space
     // Cov = M * diag(s^2) * M^T where M = ViewRot * GaussianRot
     mat3 R;
-    vec3 s = splatScale * splatScaleMult;
+    
+    // Distance-based scale: aggressively scale up distant splats to fill gaps
+    float distFromCenter = length(splatCenter);
+    float normalizedDist = maxSplatDistance > 0.0 ? clamp(distFromCenter / maxSplatDistance, 0.0, 1.0) : 0.0;
+    float distanceScale = 1.0 + (distanceScaleMax - 1.0) * pow(normalizedDist, distanceScalePower);
+    
+    vec3 s = splatScale * splatScaleMult * distanceScale;
+    
+    // OPTIMIZED VIEW-DEPENDENT EDGE FIX
+    // Detect cube edges (where 2 axis magnitudes are similar) and only fix those
+    vec3 ap = abs(splatCenter);  // Skip normalize - direction is what matters
+    
+    // Fast max/mid extraction (avoid sorting)
+    float maxC = max(ap.x, max(ap.y, ap.z));
+    float midC = max(min(ap.x, ap.y), min(max(ap.x, ap.y), ap.z));  // Median of 3
+    
+    // Edge factor: 0 at face center, 1 at edge (when midC approaches maxC)
+    float edgeFactor = midC / (maxC + 0.01);
+    
+    // View check: is camera looking toward this splat? (cheap dot product)
+    float viewDot = dot(normalize(cameraWorldPos), splatCenter) / (distFromCenter + 0.01);
+    
+    // Combined factor with fast approximation (avoid smoothstep)
+    // Linear ramp: clamp((x - edge) / (1 - edge), 0, 1) 
+    float isAtEdge = clamp((edgeFactor - 0.55) * 2.5, 0.0, 1.0);  // Ramps 0.55->0.95
+    float isInView = clamp((viewDot - 0.2) * 2.0, 0.0, 1.0);      // Ramps 0.2->0.7
+    float needsFix = isAtEdge * isInView;
+    
+    // Apply thickness fix only where needed (tunable: 0.35 = 35% min thickness)
+    float maxS = max(s.x, max(s.y, s.z));
+    s = max(s, vec3(maxS * needsFix * 0.35));
     
     if (orientMode == 1) {
       // Orient gaussian to face toward origin (0,0,0)
@@ -625,6 +658,7 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
       
       // Merge all faces, transforming to world space
       let offset = 0;
+      let maxDistanceSquared = 0;
       for (const { face, data } of processedResults) {
         const matrix = buildFaceMatrix(face, pipelineType);
         
@@ -652,7 +686,13 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
           positions[idx * 3 + 2] = finalZ;
           
           // Compute distance from origin for sorting (squared, no sqrt needed)
-          depths[idx] = finalX * finalX + finalY * finalY + finalZ * finalZ;
+          const distSq = finalX * finalX + finalY * finalY + finalZ * finalZ;
+          depths[idx] = distSq;
+          
+          // Track max distance for distance-based scaling
+          if (distSq > maxDistanceSquared) {
+            maxDistanceSquared = distSq;
+          }
           
           // Copy colors directly
           colors[idx * 3] = data.colors[i * 3];
@@ -722,7 +762,8 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
         sortedRotations[i * 4 + 3] = rotations[src * 4 + 3];
       }
       
-      console.log('Merge and sort complete');
+      const maxDistance = Math.sqrt(maxDistanceSquared);
+      console.log(`Merge and sort complete. Max distance from center: ${maxDistance.toFixed(2)}`);
       
       setMergedData({
         positions: sortedPositions,
@@ -730,7 +771,8 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
         opacities: sortedOpacities,
         scales: sortedScales,
         rotations: sortedRotations,
-        count: totalCount
+        count: totalCount,
+        maxDistance
       });
     };
     
@@ -777,7 +819,11 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
         frustumDir: { value: new THREE.Vector3(0, 0, -1) },
         frustumAngle: { value: Math.PI * 50 / 180 },  // 50° half-angle for 100° FOV
         orientMode: { value: orientMode },
-        cameraWorldPos: { value: new THREE.Vector3(0, 0, 0) }
+        cameraWorldPos: { value: new THREE.Vector3(0, 0, 0) },
+        // Distance-based scaling: scale up distant splats to fill gaps
+        maxSplatDistance: { value: mergedData.maxDistance || 1.0 },
+        distanceScaleMax: { value: 3.0 },  // 3x scale at max distance
+        distanceScalePower: { value: 0.5 }  // Aggressive early ramp (sqrt curve)
       },
       transparent: true,
       depthWrite: false,
@@ -885,6 +931,17 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
     // Set bounding sphere for frustum culling
     geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 100);
     
+    // Compute max distance for this cloud
+    let maxDistSq = 0;
+    for (let i = 0; i < sortedData.count; i++) {
+      const x = sortedData.positions[i * 3];
+      const y = sortedData.positions[i * 3 + 1];
+      const z = sortedData.positions[i * 3 + 2];
+      const distSq = x * x + y * y + z * z;
+      if (distSq > maxDistSq) maxDistSq = distSq;
+    }
+    const maxDist = Math.sqrt(maxDistSq);
+    
     const material = new THREE.ShaderMaterial({
       vertexShader,
       fragmentShader,
@@ -896,7 +953,11 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
         frustumDir: { value: frustumDir },
         frustumAngle: { value: Math.PI / 4 }, // 45° half-angle for 90° FOV
         orientMode: { value: orientMode },
-        cameraWorldPos: { value: new THREE.Vector3(0, 0, 0) }
+        cameraWorldPos: { value: new THREE.Vector3(0, 0, 0) },
+        // Distance-based scaling
+        maxSplatDistance: { value: maxDist || 1.0 },
+        distanceScaleMax: { value: 3.0 },
+        distanceScalePower: { value: 0.5 }
       },
       transparent: true,
       depthWrite: false,
@@ -943,5 +1004,115 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
   );
 }
 
+/**
+ * CubemapSkybox - Renders 6 planes with cubeface textures for a 95° FOV cubemap
+ * The planes slightly overlap at corners (due to 95° > 90°) creating seamless seams
+ */
+function CubemapSkybox({ basePath, distance = 50, enabledFaces = {}, opacity = 1.0 }) {
+  const [textures, setTextures] = useState({});
+  
+  // Load textures for each face
+  useEffect(() => {
+    const loader = new THREE.TextureLoader();
+    const faces = ['front', 'back', 'left', 'right', 'top', 'bottom'];
+    const newTextures = {};
+    
+    faces.forEach(face => {
+      // Try PNG first, then JPG
+      const pngPath = `${basePath}input_${face}.png`;
+      
+      loader.load(
+        pngPath,
+        (texture) => {
+          texture.colorSpace = THREE.SRGBColorSpace;
+          newTextures[face] = texture;
+          setTextures(prev => ({ ...prev, [face]: texture }));
+        },
+        undefined,
+        () => {
+          // PNG failed, try JPG
+          const jpgPath = `${basePath}input_${face}.jpg`;
+          loader.load(
+            jpgPath,
+            (texture) => {
+              texture.colorSpace = THREE.SRGBColorSpace;
+              newTextures[face] = texture;
+              setTextures(prev => ({ ...prev, [face]: texture }));
+            },
+            undefined,
+            (err) => console.warn(`Failed to load skybox texture for ${face}:`, err)
+          );
+        }
+      );
+    });
+    
+    return () => {
+      // Cleanup textures
+      Object.values(newTextures).forEach(tex => tex?.dispose());
+    };
+  }, [basePath]);
+  
+  // Calculate plane size for 95° FOV at given distance
+  // planeSize = 2 * distance * tan(95°/2) = 2 * distance * tan(47.5°)
+  const fovRad = (95 * Math.PI) / 180;
+  const planeSize = 2 * distance * Math.tan(fovRad / 2);
+  
+  // Face configurations: position offset direction and rotation to face inward
+  const faceConfigs = {
+    front: {
+      position: [0, 0, -distance],
+      rotation: [0, 0, 0]
+    },
+    back: {
+      position: [0, 0, distance],
+      rotation: [0, Math.PI, 0]
+    },
+    left: {
+      position: [-distance, 0, 0],
+      rotation: [0, Math.PI / 2, 0]
+    },
+    right: {
+      position: [distance, 0, 0],
+      rotation: [0, -Math.PI / 2, 0]
+    },
+    top: {
+      position: [0, distance, 0],
+      rotation: [Math.PI / 2, 0, 0]
+    },
+    bottom: {
+      position: [0, -distance, 0],
+      rotation: [-Math.PI / 2, 0, 0]
+    }
+  };
+  
+  return (
+    <group>
+      {Object.entries(faceConfigs).map(([face, config]) => {
+        const texture = textures[face];
+        const isEnabled = enabledFaces[face] !== false; // Default to enabled
+        
+        if (!texture || !isEnabled) return null;
+        
+        return (
+          <mesh
+            key={`skybox-${face}`}
+            position={config.position}
+            rotation={config.rotation}
+          >
+            <planeGeometry args={[planeSize, planeSize]} />
+            <meshBasicMaterial
+              map={texture}
+              side={THREE.FrontSide}
+              transparent={opacity < 1}
+              opacity={opacity}
+              depthWrite={true}
+            />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
 export default GaussianSplatCloud;
-export { MergedGaussianSplats, PIPELINE_TYPES, getFaceList, getFaceRotations };
+export { MergedGaussianSplats, CubemapSkybox, PIPELINE_TYPES, getFaceList, getFaceRotations };
