@@ -133,29 +133,25 @@ const vertexShader = `
     
     vec3 s = splatScale * splatScaleMult * distanceScale;
     
-    // OPTIMIZED VIEW-DEPENDENT EDGE FIX
-    // Detect cube edges (where 2 axis magnitudes are similar) and only fix those
-    vec3 ap = abs(splatCenter);  // Skip normalize - direction is what matters
+    // VIEW-ANGLE BASED EDGE FIX
+    // Splats in center of view = clean, splats at grazing angles = need thickness fix
+    // This is purely based on angle from camera look direction, not cube geometry
     
-    // Fast max/mid extraction (avoid sorting)
-    float maxC = max(ap.x, max(ap.y, ap.z));
-    float midC = max(min(ap.x, ap.y), min(max(ap.x, ap.y), ap.z));  // Median of 3
+    // Get camera's look direction (normalized) and splat direction from camera
+    vec3 camLook = normalize(-cameraWorldPos);  // Camera looks toward origin
+    vec3 toSplat = normalize(splatCenter - cameraWorldPos);
     
-    // Edge factor: 0 at face center, 1 at edge (when midC approaches maxC)
-    float edgeFactor = midC / (maxC + 0.01);
+    // Angle between look direction and splat direction
+    // dot = 1 means splat is dead center, dot = 0 means 90° off to the side
+    float viewDot = dot(camLook, toSplat);
     
-    // View check: is camera looking toward this splat? (cheap dot product)
-    float viewDot = dot(normalize(cameraWorldPos), splatCenter) / (distFromCenter + 0.01);
+    // Apply fix only at grazing angles (periphery of view)
+    // Clean zone: viewDot > 0.7 (~45° half-angle), Problem zone: viewDot < 0.5 (~60°)
+    float grazingFactor = clamp((0.7 - viewDot) * 3.33, 0.0, 1.0);  // Ramps 0.7->0.4
     
-    // Combined factor with fast approximation (avoid smoothstep)
-    // Linear ramp: clamp((x - edge) / (1 - edge), 0, 1) 
-    float isAtEdge = clamp((edgeFactor - 0.55) * 2.5, 0.0, 1.0);  // Ramps 0.55->0.95
-    float isInView = clamp((viewDot - 0.2) * 2.0, 0.0, 1.0);      // Ramps 0.2->0.7
-    float needsFix = isAtEdge * isInView;
-    
-    // Apply thickness fix only where needed (tunable: 0.35 = 35% min thickness)
+    // Apply thickness fix at grazing angles (tunable: 0.4 = 40% min thickness)
     float maxS = max(s.x, max(s.y, s.z));
-    s = max(s, vec3(maxS * needsFix * 0.35));
+    s = max(s, vec3(maxS * grazingFactor * 0.4));
     
     if (orientMode == 1) {
       // Orient gaussian to face toward origin (0,0,0)
