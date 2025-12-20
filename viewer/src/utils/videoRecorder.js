@@ -43,44 +43,56 @@ import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 
 const CONFIG = Object.freeze({
   fps: 60,
-  duration: 8,
+  duration: 6,
   width: 1280,
   height: 720,
   bitrate: 12_000_000,
-  // Combined motion: 360° pan + small parallax orbit
-  orbitRadius: 0.1,      // Small parallax circle (reduced)
-  lookDistance: 50,      // Far look distance for 360° pan
+  // Original spherical orbit + subtle horizontal parallax
+  orbitRadiusH: Math.PI * 0.25,  // Horizontal look sweep
+  orbitRadiusV: Math.PI * 0.10,  // Vertical look sweep
+  parallaxShift: 0.15,           // Subtle left-right position shift
   fov: 75,
-  chunkSize: 60,  // More frequent resets for higher bitrate
+  chunkSize: 60,
 });
 
 const TOTAL_FRAMES = CONFIG.fps * CONFIG.duration;
 
 /**
- * Calculate camera position and look target for combined motion:
- * 1. Full 360° Y rotation (pan around)
- * 2. Small circular parallax orbit
- * Both start and end at same position for seamless loop.
+ * Original spherical orbit (O-shaped look path) + subtle horizontal parallax.
+ * Camera looks in a smooth loop, with subtle left-right position shift.
  */
-function calculateCameraOrbit(progress, originalPosition) {
-  const angle = progress * Math.PI * 2; // 0 to 2π for full loop
+function calculateOrbitPosition(progress) {
+  const angle = progress * Math.PI * 2 + Math.PI / 2;
+  const phiCenter = Math.PI / 2;
+  const thetaCenter = Math.PI;
   
-  // Small parallax orbit (camera position wobbles in tiny circle)
-  const parallaxX = Math.sin(angle * 2) * CONFIG.orbitRadius; // 2x speed for subtle effect
-  const parallaxZ = (Math.cos(angle * 2) - 1) * CONFIG.orbitRadius;
+  return {
+    theta: thetaCenter + Math.sin(angle) * CONFIG.orbitRadiusH,
+    phi: phiCenter + Math.cos(angle) * CONFIG.orbitRadiusV,
+  };
+}
+
+function sphericalToCartesian(theta, phi, radius = 50) {
+  return {
+    x: radius * Math.sin(phi) * Math.sin(theta),
+    y: radius * Math.cos(phi),
+    z: radius * Math.sin(phi) * Math.cos(theta),
+  };
+}
+
+function calculateCameraOrbit(progress, originalPosition) {
+  // Subtle left-right position shift for parallax (sin loops seamlessly)
+  const parallaxX = Math.sin(progress * Math.PI * 2) * CONFIG.parallaxShift;
   
   const cameraPos = {
     x: originalPosition.x + parallaxX,
     y: originalPosition.y,
-    z: originalPosition.z + parallaxZ,
+    z: originalPosition.z,
   };
   
-  // 360° pan: look direction rotates full circle around Y axis
-  const lookTarget = {
-    x: cameraPos.x + Math.sin(angle) * CONFIG.lookDistance,
-    y: originalPosition.y,
-    z: cameraPos.z + Math.cos(angle) * CONFIG.lookDistance,
-  };
+  // Original spherical orbit for look direction
+  const { theta, phi } = calculateOrbitPosition(progress);
+  const lookTarget = sphericalToCartesian(theta, phi);
   
   return { cameraPos, lookTarget };
 }
