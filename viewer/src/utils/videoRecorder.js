@@ -1,43 +1,88 @@
 /**
  * Video Recorder for 360° Sphere Viewer
  * 
- * Strategy: Capture at native resolution, scale to 720p.
- * Uses chunked recording with context reset to avoid Chrome's memory bug.
- * 
  * Fixed specs: 60fps, 4s, 720p output
+ * 
+ * ## Chrome WebGL Canvas Read Memory Leak Bug
+ * 
+ * Chrome has a bug where reading from a WebGL canvas (via readPixels, drawImage,
+ * createImageBitmap, captureStream, toBlob, etc.) accumulates GPU memory that
+ * is never released. After ~128 reads, Chrome exhausts GPU memory and loses
+ * the WebGL context (CONTEXT_LOST_WEBGL).
+ * 
+ * This affects ALL canvas read methods - the leak is in Chrome's compositor,
+ * not in JavaScript code. Setting preserveDrawingBuffer doesn't help.
+ * 
+ * ## Workaround: Chunked Recording with Context Reset
+ * 
+ * The fix is to deliberately lose and restore the WebGL context every 100 frames
+ * using the WEBGL_lose_context extension. This forces Chrome to release the
+ * accumulated GPU resources.
+ * 
+ * Flow:
+ * 1. Record 100 frames
+ * 2. Call loseContext() - forces Chrome to release GPU resources
+ * 3. Wait 100ms
+ * 4. Call restoreContext() - Three.js automatically restores scene state
+ * 5. Wait 500ms for restoration
+ * 6. Continue with next chunk
+ * 
+ * The video encoder maintains state across context resets, so the output
+ * is seamless.
+ * 
+ * ## Other Implementation Notes
+ * 
+ * - Captures at native canvas resolution, then scales to 720p
+ * - Uses gl.readPixels() for synchronous GPU readback
+ * - Flips pixels vertically (WebGL is bottom-up)
+ * - Software H.264 encoding to avoid GPU contention
+ * - Backpressure on encoder queue to prevent memory buildup
  */
 
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 
 const CONFIG = Object.freeze({
   fps: 60,
-  duration: 4,
+  duration: 8,
   width: 1280,
   height: 720,
-  bitrate: 6_000_000,
-  orbitRadiusH: Math.PI * 0.25,
-  orbitRadiusV: Math.PI * 0.10,
-  fov: 90,
-  chunkSize: 100,
+  bitrate: 12_000_000,
+  // Combined motion: 360° pan + small parallax orbit
+  orbitRadius: 0.1,      // Small parallax circle (reduced)
+  lookDistance: 50,      // Far look distance for 360° pan
+  fov: 75,
+  chunkSize: 60,  // More frequent resets for higher bitrate
 });
 
 const TOTAL_FRAMES = CONFIG.fps * CONFIG.duration;
 
-function calculateOrbitPosition(progress) {
-  const angle = progress * Math.PI * 2 + Math.PI / 2;
-  return {
-    theta: Math.PI + Math.sin(angle) * CONFIG.orbitRadiusH,
-    phi: Math.PI / 2 + Math.cos(angle) * CONFIG.orbitRadiusV,
+/**
+ * Calculate camera position and look target for combined motion:
+ * 1. Full 360° Y rotation (pan around)
+ * 2. Small circular parallax orbit
+ * Both start and end at same position for seamless loop.
+ */
+function calculateCameraOrbit(progress, originalPosition) {
+  const angle = progress * Math.PI * 2; // 0 to 2π for full loop
+  
+  // Small parallax orbit (camera position wobbles in tiny circle)
+  const parallaxX = Math.sin(angle * 2) * CONFIG.orbitRadius; // 2x speed for subtle effect
+  const parallaxZ = (Math.cos(angle * 2) - 1) * CONFIG.orbitRadius;
+  
+  const cameraPos = {
+    x: originalPosition.x + parallaxX,
+    y: originalPosition.y,
+    z: originalPosition.z + parallaxZ,
   };
-}
-
-function sphericalToCartesian(theta, phi) {
-  const sinPhi = Math.sin(phi);
-  return {
-    x: 50 * sinPhi * Math.sin(theta),
-    y: 50 * Math.cos(phi),
-    z: 50 * sinPhi * Math.cos(theta),
+  
+  // 360° pan: look direction rotates full circle around Y axis
+  const lookTarget = {
+    x: cameraPos.x + Math.sin(angle) * CONFIG.lookDistance,
+    y: originalPosition.y,
+    z: cameraPos.z + Math.cos(angle) * CONFIG.lookDistance,
   };
+  
+  return { cameraPos, lookTarget };
 }
 
 export function createVideoRecorder() {
@@ -47,13 +92,25 @@ export function createVideoRecorder() {
   let onProgress = null;
   let onComplete = null;
   let originalFov = null;
+  let originalCameraPos = null;
   let cameraRef = null;
   let controlsRef = null;
 
   function cleanup() {
-    if (cameraRef && originalFov !== null) {
-      cameraRef.fov = originalFov;
-      cameraRef.updateProjectionMatrix();
+    if (cameraRef) {
+      if (originalFov !== null) {
+        cameraRef.fov = originalFov;
+        cameraRef.updateProjectionMatrix();
+      }
+      if (originalCameraPos) {
+        cameraRef.position.set(originalCameraPos.x, originalCameraPos.y, originalCameraPos.z);
+        // Restore original forward look direction
+        cameraRef.lookAt(
+          originalCameraPos.x,
+          originalCameraPos.y,
+          originalCameraPos.z + CONFIG.lookDistance
+        );
+      }
     }
     
     if (controlsRef) {
@@ -61,6 +118,7 @@ export function createVideoRecorder() {
     }
     
     originalFov = null;
+    originalCameraPos = null;
     cameraRef = null;
     controlsRef = null;
     isRecording = false;
@@ -83,6 +141,11 @@ export function createVideoRecorder() {
       
       if (camera) {
         originalFov = camera.fov;
+        originalCameraPos = {
+          x: camera.position.x,
+          y: camera.position.y,
+          z: camera.position.z,
+        };
         camera.fov = CONFIG.fov;
         camera.updateProjectionMatrix();
       }
@@ -155,11 +218,11 @@ export function createVideoRecorder() {
             await new Promise(r => setTimeout(r, 5));
           }
           
-          // Update camera
+          // Update camera for carousel orbit (facing outward)
           const progress = i / TOTAL_FRAMES;
-          const { theta, phi } = calculateOrbitPosition(progress);
-          const target = sphericalToCartesian(theta, phi);
-          camera.lookAt(target.x, target.y, target.z);
+          const { cameraPos, lookTarget } = calculateCameraOrbit(progress, originalCameraPos);
+          camera.position.set(cameraPos.x, cameraPos.y, cameraPos.z);
+          camera.lookAt(lookTarget.x, lookTarget.y, lookTarget.z);
           
           // Render
           renderFn();
