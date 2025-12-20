@@ -1,10 +1,11 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import { Suspense, useState, useEffect, useRef } from 'react';
+import { Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import GaussianSplatCloud, { MergedGaussianSplats, PIPELINE_TYPES, getFaceList, getFaceRotations } from './components/GaussianSplats';
 import { FrustumVisualizer, FrustumWireframe } from './components/FrustumVisualizer';
 import GenerateDashboard from './components/GenerateDashboard';
+import { createVideoRecorder, downloadBlob, VIDEO_CONFIG } from './utils/videoRecorder';
 import './App.css';
 
 // Get face rotations from shared definitions
@@ -35,6 +36,26 @@ function CameraReset({ trigger, controlsRef }) {
       }
     }
   }, [trigger, camera, controlsRef]);
+  
+  return null;
+}
+
+// Video recorder bridge - provides access to Three.js internals for recording
+function VideoRecorderBridge({ recorderRef, controlsRef }) {
+  const { gl, camera, scene } = useThree();
+  
+  useEffect(() => {
+    if (recorderRef) {
+      recorderRef.current = {
+        camera,
+        canvas: gl.domElement,
+        controls: controlsRef?.current,
+        render: () => gl.render(scene, camera),
+        gl,
+        scene,
+      };
+    }
+  }, [gl, camera, scene, controlsRef, recorderRef]);
   
   return null;
 }
@@ -193,6 +214,61 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
   const [viewFov, setViewFov] = useState(100);  // Narrower FOV for more zoom
   const [faceDistance, setFaceDistance] = useState(0);  // Distance to push faces outward from center
   const controlsRef = useRef();
+  const threeBridgeRef = useRef(null);
+  
+  // Video recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingProgress, setRecordingProgress] = useState(0);
+  const videoRecorderRef = useRef(null);
+  
+  // Start video recording (fixed: 60fps, 4s, 720p for optimal performance)
+  const startRecording = useCallback(() => {
+    if (!threeBridgeRef.current || isRecording) return;
+    
+    const recorder = createVideoRecorder(); // Uses optimized fixed config
+    videoRecorderRef.current = recorder;
+    
+    // Disable parallax during recording
+    setParallaxEnabled(false);
+    
+    recorder
+      .onProgress((percent) => {
+        setRecordingProgress(percent);
+      })
+      .onComplete((blob) => {
+        setIsRecording(false);
+        setRecordingProgress(0);
+        // Re-enable controls
+        if (controlsRef.current) {
+          controlsRef.current.enabled = true;
+        }
+        // Download the video
+        const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+        const extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
+        downloadBlob(blob, `sharp-360-${timestamp}.${extension}`);
+      });
+    
+    setIsRecording(true);
+    
+    const { canvas, controls, camera, gl, scene } = threeBridgeRef.current;
+    recorder.start(canvas, controls, camera, () => {
+      gl.render(scene, camera);
+    });
+  }, [isRecording]);
+  
+  // Cancel recording
+  const cancelRecording = useCallback(() => {
+    if (videoRecorderRef.current) {
+      videoRecorderRef.current.cancel();
+      videoRecorderRef.current = null;
+    }
+    setIsRecording(false);
+    setRecordingProgress(0);
+    // Re-enable controls
+    if (controlsRef.current) {
+      controlsRef.current.enabled = true;
+    }
+  }, []);
 
   // Get the face list for the current pipeline type
   const expectedFaces = getFaceList(pipelineType);
@@ -424,14 +500,57 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
             >
               {parallaxEnabled ? 'Stop Parallax' : 'Start Parallax'}
             </button>
+
+            <h2>Video Recording</h2>
+            <div className="recording-info">
+              <p className="recording-specs">
+                {VIDEO_CONFIG.fps}fps • {VIDEO_CONFIG.duration}s • {VIDEO_CONFIG.width}×{VIDEO_CONFIG.height}
+              </p>
+              <p className="recording-hint">
+                Optimized H.264/MP4 export with circular orbit path
+              </p>
+            </div>
           </>
         )}
       </div>
       )}
 
+      {/* Recording overlay */}
+      {isRecording && (
+        <div className="recording-overlay">
+          <div className="recording-indicator">
+            <span className="recording-dot"></span>
+            <span>Recording...</span>
+          </div>
+          <div className="recording-progress-bar">
+            <div 
+              className="recording-progress-fill" 
+              style={{ width: `${recordingProgress}%` }}
+            />
+          </div>
+          <span className="recording-percent">{Math.round(recordingProgress)}%</span>
+          <button className="cancel-recording-btn" onClick={cancelRecording}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Record button (floating) */}
+      {!isRecording && (
+        <button 
+          className="record-btn"
+          onClick={startRecording}
+          title="Record 360° orbit video"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="12" cy="12" r="8" />
+          </svg>
+        </button>
+      )}
+
       <Canvas
         camera={{ position: [0, 0, 0], fov: 45 }}
-        gl={{ antialias: true, alpha: true }}
+        gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true }}
         className="splat-canvas"
       >
         <color attach="background" args={['#0a0a0f']} />
@@ -489,7 +608,8 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
         <WASDControls speed={0.05} controlsRef={controlsRef} />
         <CameraReset trigger={cameraResetTrigger} controlsRef={controlsRef} />
         <CameraFov fov={viewFov} />
-        <ParallaxAnimation enabled={parallaxEnabled} controlsRef={controlsRef} />
+        <ParallaxAnimation enabled={parallaxEnabled && !isRecording} controlsRef={controlsRef} />
+        <VideoRecorderBridge recorderRef={threeBridgeRef} controlsRef={controlsRef} />
         <OrbitControls 
           ref={controlsRef}
           enableDamping 
