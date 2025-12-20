@@ -48,9 +48,9 @@ const CONFIG = Object.freeze({
   height: 720,
   bitrate: 12_000_000,
   // Original spherical orbit + subtle horizontal parallax
-  orbitRadiusH: Math.PI * 0.25,  // Horizontal look sweep
-  orbitRadiusV: Math.PI * 0.10,  // Vertical look sweep
-  parallaxShift: 0.15,           // Subtle left-right position shift
+  orbitRadiusH: Math.PI * 0.15,  // Horizontal look sweep (reduced from 0.25)
+  orbitRadiusV: Math.PI * 0.06,  // Vertical look sweep (reduced from 0.10)
+  parallaxShift: 0.1,            // Subtle left-right position shift (reduced from 0.15)
   fov: 75,
   chunkSize: 60,
 });
@@ -175,11 +175,32 @@ export function createVideoRecorder() {
       scaleCanvas.height = CONFIG.height;
       const scaleCtx = scaleCanvas.getContext('2d', { alpha: false });
       
+      // Try HEVC first, fall back to AVC
+      const hevcCodec = 'hvc1.1.6.L93.B0';
+      const avcCodec = 'avc1.42001f';
+      
+      let useHevc = false;
+      try {
+        const hevcSupport = await VideoEncoder.isConfigSupported({
+          codec: hevcCodec,
+          width: CONFIG.width,
+          height: CONFIG.height,
+          bitrate: CONFIG.bitrate,
+          framerate: CONFIG.fps,
+        });
+        useHevc = hevcSupport.supported;
+      } catch (e) {
+        useHevc = false;
+      }
+      
+      const codecString = useHevc ? hevcCodec : avcCodec;
+      console.log(`Using codec: ${useHevc ? 'HEVC (H.265)' : 'AVC (H.264)'}`);
+      
       // Setup encoder
       const muxer = new Muxer({
         target: new ArrayBufferTarget(),
         video: {
-          codec: 'avc',
+          codec: useHevc ? 'hevc' : 'avc',
           width: CONFIG.width,
           height: CONFIG.height,
         },
@@ -195,12 +216,12 @@ export function createVideoRecorder() {
       });
       
       encoder.configure({
-        codec: 'avc1.42001f',
+        codec: codecString,
         width: CONFIG.width,
         height: CONFIG.height,
         bitrate: CONFIG.bitrate,
         framerate: CONFIG.fps,
-        hardwareAcceleration: 'prefer-software',
+        hardwareAcceleration: 'prefer-hardware',  // Use GPU encoder (MediaCodec)
       });
       
       const frameDurationUs = Math.round(1_000_000 / CONFIG.fps);
@@ -260,10 +281,11 @@ export function createVideoRecorder() {
           // Scale to output resolution
           scaleCtx.drawImage(flipCanvas, 0, 0, CONFIG.width, CONFIG.height);
           
-          // Encode from scaled canvas
+          // Encode from scaled canvas - use explicit visibleRect for hardware encoder
           const frame = new VideoFrame(scaleCanvas, {
             timestamp: i * frameDurationUs,
             duration: frameDurationUs,
+            visibleRect: { x: 0, y: 0, width: CONFIG.width, height: CONFIG.height },
           });
           
           encoder.encode(frame, { keyFrame: i % CONFIG.fps === 0 });
