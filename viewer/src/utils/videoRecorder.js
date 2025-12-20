@@ -257,9 +257,12 @@ export function createVideoRecorder() {
           camera.position.set(cameraPos.x, cameraPos.y, cameraPos.z);
           camera.lookAt(lookTarget.x, lookTarget.y, lookTarget.z);
           
-          // Render
+          // Render and wait for GPU to complete
           renderFn();
           gl.finish();
+          
+          // Wait for browser to composite the frame
+          await new Promise(r => requestAnimationFrame(r));
           
           // Read pixels at FULL source resolution
           gl.readPixels(0, 0, srcWidth, srcHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixelBuffer);
@@ -303,7 +306,10 @@ export function createVideoRecorder() {
             loseContext.loseContext();
             await new Promise(r => setTimeout(r, 100));
             loseContext.restoreContext();
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 1000)); // Longer wait for context restore
+            // Re-render multiple times to ensure splats are fully loaded
+            renderFn();
+            await new Promise(r => requestAnimationFrame(r));
             renderFn();
             await new Promise(r => requestAnimationFrame(r));
           }
