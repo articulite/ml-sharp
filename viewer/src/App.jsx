@@ -213,6 +213,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
   const [useMergedSplats, setUseMergedSplats] = useState(true);  // Use merged by default for correct depth
   const [viewFov, setViewFov] = useState(100);  // Narrower FOV for more zoom
   const [faceDistance, setFaceDistance] = useState(0);  // Distance to push faces outward from center
+  const [gaussianDropRate, setGaussianDropRate] = useState(0);  // Percentage of gaussians to randomly drop (0-90)
   const controlsRef = useRef();
   const threeBridgeRef = useRef(null);
   
@@ -447,6 +448,22 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
               <p className="merge-hint">Sort all splats globally by distance from origin</p>
             </div>
 
+            <h2>Performance</h2>
+            <div className="gaussian-drop-slider">
+              <label>
+                <span>Drop Gaussians: {gaussianDropRate}%</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="90"
+                  step="10"
+                  value={gaussianDropRate}
+                  onChange={(e) => setGaussianDropRate(parseInt(e.target.value))}
+                />
+              </label>
+              <p className="slider-hint">Randomly removes gaussians to improve performance</p>
+            </div>
+
             <h2>Frustum Culling</h2>
             <div className="cull-mode-selector">
               {CULL_MODES.map(mode => (
@@ -560,7 +577,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
           {useMergedSplats ? (
             // Single merged mesh with all faces - correct depth sorting
             <MergedGaussianSplats
-              key={`merged-${refreshTrigger}-${splatBasePath}-${orientMode}-${pipelineType}-${faceDistance}-${cullMode}`}
+              key={`merged-${refreshTrigger}-${splatBasePath}-${orientMode}-${pipelineType}-${faceDistance}-${cullMode}-drop${gaussianDropRate}`}
               basePath={splatBasePath}
               enabledFaces={enabledFaces}
               splatScale={splatScale}
@@ -568,6 +585,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
               pipelineType={pipelineType}
               faceDistance={faceDistance}
               cullMode={cullMode}
+              dropRate={gaussianDropRate / 100}
             />
           ) : (
             // Separate meshes per face (may have depth issues)

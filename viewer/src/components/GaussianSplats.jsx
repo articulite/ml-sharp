@@ -597,7 +597,7 @@ function transformRotation(qw, qx, qy, qz, matrix) {
  * MergedGaussianSplats - Loads multiple faces, merges into one mesh, sorts by distance from origin
  * This ensures correct depth ordering for a viewer at center looking outward
  */
-function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orientMode = 0, pipelineType = 'cubemap_6', faceDistance = 0, cullMode = 0 }) {
+function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orientMode = 0, pipelineType = 'cubemap_6', faceDistance = 0, cullMode = 0, dropRate = 0 }) {
   const meshRef = useRef();
   const [mergedData, setMergedData] = useState(null);
   const { camera, size } = useThree();
@@ -644,21 +644,32 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
         });
       }
       
-      // Count total splats
-      const totalCount = processedResults.reduce((sum, { data }) => sum + data.count, 0);
-      console.log(`Total splats across ${processedResults.length} faces: ${totalCount}`);
+      // Count total splats (accounting for drop rate)
+      const rawTotalCount = processedResults.reduce((sum, { data }) => sum + data.count, 0);
+      const keepRate = 1 - dropRate;
+      const estimatedCount = Math.ceil(rawTotalCount * keepRate);
+      console.log(`Total splats: ${rawTotalCount}, keeping ~${(keepRate * 100).toFixed(0)}% = ~${estimatedCount}`);
       
-      // Allocate merged arrays
-      const positions = new Float32Array(totalCount * 3);
-      const colors = new Float32Array(totalCount * 3);
-      const opacities = new Float32Array(totalCount);
-      const scales = new Float32Array(totalCount * 3);
-      const rotations = new Float32Array(totalCount * 4);
-      const depths = new Float32Array(totalCount);
+      // Allocate merged arrays (use raw count, we'll trim at the end)
+      const positions = new Float32Array(rawTotalCount * 3);
+      const colors = new Float32Array(rawTotalCount * 3);
+      const opacities = new Float32Array(rawTotalCount);
+      const scales = new Float32Array(rawTotalCount * 3);
+      const rotations = new Float32Array(rawTotalCount * 4);
+      const depths = new Float32Array(rawTotalCount);
       
       // Merge all faces, transforming to world space
-      let offset = 0;
+      let actualCount = 0;  // Track actual kept splats
+      let processedCount = 0;  // Track all processed splats (for seeded random)
       let maxDistanceSquared = 0;
+      
+      // Seeded random for consistent dropping
+      const seed = dropRate * 12345;
+      const seededRandom = (idx) => {
+        const x = Math.sin(seed + idx * 9999) * 10000;
+        return x - Math.floor(x);
+      };
+      
       for (const { face, data } of processedResults) {
         const matrix = buildFaceMatrix(face, pipelineType);
         
@@ -666,7 +677,14 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
         const faceDir = getFrustumDirection(face);
         
         for (let i = 0; i < data.count; i++) {
-          const idx = offset + i;
+          // Randomly drop gaussians based on dropRate (use processedCount for consistent randomness)
+          if (dropRate > 0 && seededRandom(processedCount) < dropRate) {
+            processedCount++;
+            continue;  // Skip this gaussian
+          }
+          processedCount++;
+          
+          const idx = actualCount;
           
           // Transform position to world space
           const localPos = {
@@ -719,27 +737,29 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
           rotations[idx * 4 + 1] = worldRot.x;
           rotations[idx * 4 + 2] = worldRot.y;
           rotations[idx * 4 + 3] = worldRot.z;
+          
+          actualCount++;  // Increment after successfully adding a splat
         }
-        
-        offset += data.count;
       }
+      
+      console.log(`Kept ${actualCount} splats after ${(dropRate * 100).toFixed(0)}% drop`);
       
       // Sort ALL splats by distance from origin (farthest first for back-to-front)
       console.log('Sorting all splats by distance from origin...');
-      const indices = new Uint32Array(totalCount);
-      for (let i = 0; i < totalCount; i++) indices[i] = i;
+      const indices = new Uint32Array(actualCount);
+      for (let i = 0; i < actualCount; i++) indices[i] = i;
       
       // Sort indices by depth (farthest first)
       indices.sort((a, b) => depths[b] - depths[a]);
       
       // Reorder all arrays according to sorted indices
-      const sortedPositions = new Float32Array(totalCount * 3);
-      const sortedColors = new Float32Array(totalCount * 3);
-      const sortedOpacities = new Float32Array(totalCount);
-      const sortedScales = new Float32Array(totalCount * 3);
-      const sortedRotations = new Float32Array(totalCount * 4);
+      const sortedPositions = new Float32Array(actualCount * 3);
+      const sortedColors = new Float32Array(actualCount * 3);
+      const sortedOpacities = new Float32Array(actualCount);
+      const sortedScales = new Float32Array(actualCount * 3);
+      const sortedRotations = new Float32Array(actualCount * 4);
       
-      for (let i = 0; i < totalCount; i++) {
+      for (let i = 0; i < actualCount; i++) {
         const src = indices[i];
         
         sortedPositions[i * 3] = positions[src * 3];
@@ -771,13 +791,13 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
         opacities: sortedOpacities,
         scales: sortedScales,
         rotations: sortedRotations,
-        count: totalCount,
+        count: actualCount,
         maxDistance
       });
     };
     
     loadAndMerge();
-  }, [basePath, enabledFaces, pipelineType, faceDistance, cullMode]);
+  }, [basePath, enabledFaces, pipelineType, faceDistance, cullMode, dropRate]);
   
   const { geometry, material } = useMemo(() => {
     if (!mergedData) return { geometry: null, material: null };
@@ -1004,115 +1024,5 @@ function GaussianSplatCloud({ url, rotation = [0, 0, 0], splatScale = 1.0, cullM
   );
 }
 
-/**
- * CubemapSkybox - Renders 6 planes with cubeface textures for a 95° FOV cubemap
- * The planes slightly overlap at corners (due to 95° > 90°) creating seamless seams
- */
-function CubemapSkybox({ basePath, distance = 50, enabledFaces = {}, opacity = 1.0 }) {
-  const [textures, setTextures] = useState({});
-  
-  // Load textures for each face
-  useEffect(() => {
-    const loader = new THREE.TextureLoader();
-    const faces = ['front', 'back', 'left', 'right', 'top', 'bottom'];
-    const newTextures = {};
-    
-    faces.forEach(face => {
-      // Try PNG first, then JPG
-      const pngPath = `${basePath}input_${face}.png`;
-      
-      loader.load(
-        pngPath,
-        (texture) => {
-          texture.colorSpace = THREE.SRGBColorSpace;
-          newTextures[face] = texture;
-          setTextures(prev => ({ ...prev, [face]: texture }));
-        },
-        undefined,
-        () => {
-          // PNG failed, try JPG
-          const jpgPath = `${basePath}input_${face}.jpg`;
-          loader.load(
-            jpgPath,
-            (texture) => {
-              texture.colorSpace = THREE.SRGBColorSpace;
-              newTextures[face] = texture;
-              setTextures(prev => ({ ...prev, [face]: texture }));
-            },
-            undefined,
-            (err) => console.warn(`Failed to load skybox texture for ${face}:`, err)
-          );
-        }
-      );
-    });
-    
-    return () => {
-      // Cleanup textures
-      Object.values(newTextures).forEach(tex => tex?.dispose());
-    };
-  }, [basePath]);
-  
-  // Calculate plane size for 95° FOV at given distance
-  // planeSize = 2 * distance * tan(95°/2) = 2 * distance * tan(47.5°)
-  const fovRad = (95 * Math.PI) / 180;
-  const planeSize = 2 * distance * Math.tan(fovRad / 2);
-  
-  // Face configurations: position offset direction and rotation to face inward
-  const faceConfigs = {
-    front: {
-      position: [0, 0, -distance],
-      rotation: [0, 0, 0]
-    },
-    back: {
-      position: [0, 0, distance],
-      rotation: [0, Math.PI, 0]
-    },
-    left: {
-      position: [-distance, 0, 0],
-      rotation: [0, Math.PI / 2, 0]
-    },
-    right: {
-      position: [distance, 0, 0],
-      rotation: [0, -Math.PI / 2, 0]
-    },
-    top: {
-      position: [0, distance, 0],
-      rotation: [Math.PI / 2, 0, 0]
-    },
-    bottom: {
-      position: [0, -distance, 0],
-      rotation: [-Math.PI / 2, 0, 0]
-    }
-  };
-  
-  return (
-    <group>
-      {Object.entries(faceConfigs).map(([face, config]) => {
-        const texture = textures[face];
-        const isEnabled = enabledFaces[face] !== false; // Default to enabled
-        
-        if (!texture || !isEnabled) return null;
-        
-        return (
-          <mesh
-            key={`skybox-${face}`}
-            position={config.position}
-            rotation={config.rotation}
-          >
-            <planeGeometry args={[planeSize, planeSize]} />
-            <meshBasicMaterial
-              map={texture}
-              side={THREE.FrontSide}
-              transparent={opacity < 1}
-              opacity={opacity}
-              depthWrite={true}
-            />
-          </mesh>
-        );
-      })}
-    </group>
-  );
-}
-
 export default GaussianSplatCloud;
-export { MergedGaussianSplats, CubemapSkybox, PIPELINE_TYPES, getFaceList, getFaceRotations };
+export { MergedGaussianSplats, PIPELINE_TYPES, getFaceList, getFaceRotations };
