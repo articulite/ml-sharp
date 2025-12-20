@@ -33,7 +33,7 @@ const vertexShader = `
   uniform float splatScaleMult;
   uniform int cullMode;
   uniform vec3 frustumDir;  // Direction the frustum faces (normalized)
-  uniform float frustumAngle; // Half angle in radians (45° for 90° FOV)
+  uniform float frustumAngle; // Half angle in radians (50° for 100° FOV)
   uniform int orientMode;  // 0=stored rotation, 1=orient to center, 2=billboard to camera
   uniform vec3 cameraWorldPos;  // Camera position for billboard mode
   
@@ -340,7 +340,7 @@ function isInsideFrustumCPU(x, y, z, frustumDir, halfAngle) {
 // Apply CPU frustum culling to splat data
 function filterByFrustum(splatData, face, modelMatrix) {
   const frustumDir = getFrustumDirection(face);
-  const halfAngle = Math.PI / 4; // 45° for 90° FOV
+  const halfAngle = Math.PI * 50 / 180; // 50° for 100° FOV
   
   const count = splatData.count;
   const validIndices = [];
@@ -775,7 +775,7 @@ function MergedGaussianSplats({ basePath, enabledFaces, splatScale = 1.0, orient
         splatScaleMult: { value: splatScale },
         cullMode: { value: 0 },  // No culling for merged splats
         frustumDir: { value: new THREE.Vector3(0, 0, -1) },
-        frustumAngle: { value: Math.PI / 4 },
+        frustumAngle: { value: Math.PI * 50 / 180 },  // 50° half-angle for 100° FOV
         orientMode: { value: orientMode },
         cameraWorldPos: { value: new THREE.Vector3(0, 0, 0) }
       },
