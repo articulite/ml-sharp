@@ -203,17 +203,17 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
   const [enabledFaces, setEnabledFaces] = useState({});
   const [loading, setLoading] = useState(true);
   const [splatScale, setSplatScale] = useState(1.0);
-  const [cullMode, setCullMode] = useState(0);
+  const [cullMode, setCullMode] = useState(1);  // CPU Pre-filter by default
   const [showFrustums, setShowFrustums] = useState(false);
   const [frustumDepth, setFrustumDepth] = useState(2.0);
   const [panelOpen, setPanelOpen] = useState(true);
   const [cameraResetTrigger, setCameraResetTrigger] = useState(0);
   const [parallaxEnabled, setParallaxEnabled] = useState(true);  // Parallax on by default
-  const [orientMode, setOrientMode] = useState(2);  // 0=stored, 1=to center, 2=billboard (camera-facing)
+  const [orientMode, setOrientMode] = useState(1);  // 0=stored, 1=to center, 2=billboard - default to center
   const [useMergedSplats, setUseMergedSplats] = useState(true);  // Use merged by default for correct depth
-  const [viewFov, setViewFov] = useState(100);  // Narrower FOV for more zoom
+  const [viewFov, setViewFov] = useState(60);  // 60° FOV default
   const [faceDistance, setFaceDistance] = useState(0);  // Distance to push faces outward from center
-  const [gaussianDropRate, setGaussianDropRate] = useState(0);  // Percentage of gaussians to randomly drop (0-90)
+  const [gaussianDropRate, setGaussianDropRate] = useState(80);  // Drop 80% of gaussians by default for performance
   const controlsRef = useRef();
   const threeBridgeRef = useRef(null);
   
