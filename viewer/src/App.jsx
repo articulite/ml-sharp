@@ -177,7 +177,7 @@ function LoadingIndicator() {
   );
 }
 
-function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipelineType = DEFAULT_PIPELINE_TYPE }) {
+function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipelineType = DEFAULT_PIPELINE_TYPE, fullscreenMode = false }) {
   const [availableFaces, setAvailableFaces] = useState([]);
   const [enabledFaces, setEnabledFaces] = useState({});
   const [loading, setLoading] = useState(true);
@@ -254,6 +254,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
 
   return (
     <div className="viewer-container">
+      {!fullscreenMode && (
       <div className={`controls-panel ${panelOpen ? 'open' : 'closed'}`}>
         <button className="panel-toggle" onClick={() => setPanelOpen(!panelOpen)}>
           {panelOpen ? '◀' : '▶'}
@@ -426,6 +427,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
           </>
         )}
       </div>
+      )}
 
       <Canvas
         camera={{ position: [0, 0, 0], fov: 45 }}
@@ -506,6 +508,41 @@ function App() {
   const [splatRefreshTrigger, setSplatRefreshTrigger] = useState(0);
   const [splatBasePath, setSplatBasePath] = useState('/splats/');
   const [currentPipelineType, setCurrentPipelineType] = useState(DEFAULT_PIPELINE_TYPE);
+  const [fullscreenMode, setFullscreenMode] = useState(false);
+
+  // F11 fullscreen mode - hides navbar and viewer UI + browser fullscreen
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'F11') {
+        e.preventDefault();
+        
+        if (!document.fullscreenElement) {
+          // Enter fullscreen
+          document.documentElement.requestFullscreen().catch(() => {});
+          setFullscreenMode(true);
+        } else {
+          // Exit fullscreen
+          document.exitFullscreen().catch(() => {});
+          setFullscreenMode(false);
+        }
+      }
+    };
+    
+    // Sync state when user exits fullscreen via Escape key
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement) {
+        setFullscreenMode(false);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
 
   const handleSplatsGenerated = (splatsData) => {
     // If splatsData contains a job path, use that; otherwise use default
@@ -525,7 +562,8 @@ function App() {
   };
 
   return (
-    <div className="app">
+    <div className={`app ${fullscreenMode ? 'fullscreen-mode' : ''}`}>
+      {!fullscreenMode && (
       <header className="app-header">
         <h1>Sharp Viewer</h1>
         <nav className="app-tabs">
@@ -550,6 +588,7 @@ function App() {
           </button>
         </nav>
       </header>
+      )}
       <main className="app-main">
         {activeTab === 'generate' && (
           <GenerateDashboard onSplatsGenerated={handleSplatsGenerated} />
@@ -559,6 +598,7 @@ function App() {
             refreshTrigger={splatRefreshTrigger} 
             splatBasePath={splatBasePath} 
             pipelineType={currentPipelineType}
+            fullscreenMode={fullscreenMode}
           />
         )}
       </main>
