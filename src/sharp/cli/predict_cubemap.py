@@ -540,30 +540,42 @@ class CubemapPredictor:
             if len(edge1) == 0 or len(edge2) == 0:
                 continue
             
-            # Compute median Y (floor height) at each edge
-            median_y1 = np.median(edge1[:, 1])
-            median_y2 = np.median(edge2[:, 1])
+            # Find FLOOR level (lowest Y values) at each edge - not median of all points
+            floor_percentile = 15  # Bottom 15% of Y values are "floor"
+            floor_y1 = np.percentile(edge1[:, 1], floor_percentile)
+            floor_y2 = np.percentile(edge2[:, 1], floor_percentile)
             
-            # Target: average of the two
-            target_y = (median_y1 + median_y2) / 2
+            # Target: average floor height
+            target_floor = (floor_y1 + floor_y2) / 2
             
-            # Correction for each face's edge points
-            correction_y1 = target_y - median_y1
-            correction_y2 = target_y - median_y2
+            # Correction amounts
+            correction_y1 = target_floor - floor_y1
+            correction_y2 = target_floor - floor_y2
             
-            LOGGER.info(f"  {face1}<->{face2}: floor1={median_y1:.2f}, floor2={median_y2:.2f}, target={target_y:.2f}")
+            LOGGER.info(f"  {face1}<->{face2}: floor1={floor_y1:.2f}, floor2={floor_y2:.2f}, target={target_floor:.2f}")
             
-            # Apply corrections with falloff from edge
+            # Only apply corrections to FLOOR-LEVEL points (not characters/walls)
+            # Points within 20% of floor height range get corrected
+            y_range1 = edge1[:, 1].max() - edge1[:, 1].min()
+            y_range2 = edge2[:, 1].max() - edge2[:, 1].min()
+            floor_threshold1 = floor_y1 + y_range1 * 0.25  # Only bottom 25% of height
+            floor_threshold2 = floor_y2 + y_range2 * 0.25
+            
             indices1 = np.where(mask1)[0]
             indices2 = np.where(mask2)[0]
             
-            for idx in indices1:
-                corrections[face1][idx, 1] += correction_y1
-                correction_weights[face1][idx] += 1
+            # Apply correction only to floor-level points
+            for i, idx in enumerate(indices1):
+                point_y = pos1[idx, 1]
+                if point_y <= floor_threshold1:  # Is this a floor point?
+                    corrections[face1][idx, 1] += correction_y1
+                    correction_weights[face1][idx] += 1
             
-            for idx in indices2:
-                corrections[face2][idx, 1] += correction_y2
-                correction_weights[face2][idx] += 1
+            for i, idx in enumerate(indices2):
+                point_y = pos2[idx, 1]
+                if point_y <= floor_threshold2:  # Is this a floor point?
+                    corrections[face2][idx, 1] += correction_y2
+                    correction_weights[face2][idx] += 1
         
         # Apply corrections
         results = {}
