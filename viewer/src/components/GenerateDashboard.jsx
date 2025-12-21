@@ -27,9 +27,11 @@ function formatDate(timestamp) {
 
 function JobHistory({ onLoadJob, onDeleteJob, serverOnline }) {
   const [jobs, setJobs] = useState([]);
+  const [jobInfos, setJobInfos] = useState({});  // job_id -> info with FOV
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(true);
   const [deletingId, setDeletingId] = useState(null);
+  const [harmonizingId, setHarmonizingId] = useState(null);
 
   const fetchJobs = useCallback(async () => {
     if (!serverOnline) {
@@ -42,6 +44,20 @@ function JobHistory({ onLoadJob, onDeleteJob, serverOnline }) {
       if (response.ok) {
         const data = await response.json();
         setJobs(data.jobs || []);
+        
+        // Fetch info for each job (FOV, harmonization status)
+        const infos = {};
+        for (const job of data.jobs || []) {
+          try {
+            const infoResponse = await fetch(`${API_BASE}/api/jobs/${job.job_id}/info`);
+            if (infoResponse.ok) {
+              infos[job.job_id] = await infoResponse.json();
+            }
+          } catch (e) {
+            // Ignore individual fetch errors
+          }
+        }
+        setJobInfos(infos);
       }
     } catch (e) {
       console.error('Failed to fetch jobs:', e);
@@ -70,6 +86,31 @@ function JobHistory({ onLoadJob, onDeleteJob, serverOnline }) {
     setDeletingId(null);
   };
 
+  const handleHarmonize = async (e, jobId) => {
+    e.stopPropagation();
+    setHarmonizingId(jobId);
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/jobs/${jobId}/harmonize`, { method: 'POST' });
+      const data = await response.json();
+      
+      if (data.success) {
+        // Update job info to show harmonized
+        setJobInfos(prev => ({
+          ...prev,
+          [jobId]: { ...prev[jobId], has_harmonized: true }
+        }));
+        alert(`Harmonization complete!\n\nScale factors:\n${Object.entries(data.scales).map(([f, s]) => `  ${f}: ${s.toFixed(3)}`).join('\n')}`);
+      } else {
+        alert(`Harmonization failed: ${data.error}`);
+      }
+    } catch (e) {
+      alert(`Harmonization error: ${e.message}`);
+    }
+    
+    setHarmonizingId(null);
+  };
+
   if (loading) {
     return (
       <div className="section job-history-section">
@@ -93,48 +134,70 @@ function JobHistory({ onLoadJob, onDeleteJob, serverOnline }) {
               No previous jobs found. Generate your first cubemap!
             </div>
           ) : (
-            jobs.map(job => (
-              <div 
-                key={job.job_id} 
-                className="job-card"
-                onClick={() => onLoadJob(job.job_id)}
-              >
-                <div className="job-thumbnail">
-                  {job.thumbnail_url ? (
-                    <img src={`${API_BASE}${job.thumbnail_url}`} alt="Input" />
-                  ) : (
-                    <div className="job-thumbnail-placeholder">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                        <rect x="3" y="3" width="18" height="18" rx="2" />
-                        <circle cx="8.5" cy="8.5" r="1.5" />
-                        <path d="M21 15l-5-5L5 21" />
-                      </svg>
-                    </div>
-                  )}
-                </div>
-                <div className="job-info">
-                  <div className="job-date">{formatDate(job.created_at)}</div>
-                  <div className="job-stats">
-                    <span className="job-stat">
-                      <span className="stat-icon">◫</span> {job.cubeface_count}
-                    </span>
-                    {job.has_splats && (
-                      <span className="job-stat splat-stat">
-                        <span className="stat-icon">◆</span> {job.splat_count}
-                      </span>
+            jobs.map(job => {
+              const info = jobInfos[job.job_id] || {};
+              const fovClass = info.fov_overlap >= 15 ? 'fov-good' : info.fov_overlap >= 5 ? 'fov-ok' : 'fov-bad';
+              
+              return (
+                <div 
+                  key={job.job_id} 
+                  className="job-card"
+                  onClick={() => onLoadJob(job.job_id)}
+                >
+                  <div className="job-thumbnail">
+                    {job.thumbnail_url ? (
+                      <img src={`${API_BASE}${job.thumbnail_url}`} alt="Input" />
+                    ) : (
+                      <div className="job-thumbnail-placeholder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <rect x="3" y="3" width="18" height="18" rx="2" />
+                          <circle cx="8.5" cy="8.5" r="1.5" />
+                          <path d="M21 15l-5-5L5 21" />
+                        </svg>
+                      </div>
                     )}
                   </div>
+                  <div className="job-info">
+                    <div className="job-date">{formatDate(job.created_at)}</div>
+                    <div className="job-stats">
+                      <span className="job-stat">
+                        <span className="stat-icon">◫</span> {job.cubeface_count}
+                      </span>
+                      {job.has_splats && (
+                        <span className="job-stat splat-stat">
+                          <span className="stat-icon">◆</span> {job.splat_count}
+                        </span>
+                      )}
+                      {info.fov && (
+                        <span className={`job-stat fov-stat ${fovClass}`} title={`${info.fov_overlap}° overlap between faces`}>
+                          <span className="stat-icon">◠</span> {info.fov}°
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="job-actions">
+                    {job.has_splats && (
+                      <button 
+                        className={`job-harmonize-btn ${info.has_harmonized ? 'harmonized' : ''}`}
+                        onClick={(e) => handleHarmonize(e, job.job_id)}
+                        disabled={harmonizingId === job.job_id}
+                        title={info.has_harmonized ? "Re-run harmonization" : "Run depth harmonization"}
+                      >
+                        {harmonizingId === job.job_id ? '⏳' : info.has_harmonized ? '✓' : 'H'}
+                      </button>
+                    )}
+                    <button 
+                      className="job-delete-btn"
+                      onClick={(e) => handleDelete(e, job.job_id)}
+                      disabled={deletingId === job.job_id}
+                      title="Delete job"
+                    >
+                      {deletingId === job.job_id ? '...' : '×'}
+                    </button>
+                  </div>
                 </div>
-                <button 
-                  className="job-delete-btn"
-                  onClick={(e) => handleDelete(e, job.job_id)}
-                  disabled={deletingId === job.job_id}
-                  title="Delete job"
-                >
-                  {deletingId === job.job_id ? '...' : '×'}
-                </button>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}

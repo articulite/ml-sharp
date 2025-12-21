@@ -844,8 +844,51 @@ async def list_job_files(job_id: str):
     return files
 
 
+@app.get("/api/jobs/{job_id}/info")
+async def get_job_info(job_id: str):
+    """Get detailed info about a job including FOV from PLY metadata."""
+    from plyfile import PlyData
+    
+    job_dir = OUTPUT_DIR / job_id
+    if not job_dir.exists():
+        return {"error": "Job not found"}
+    
+    splats_dir = job_dir / "splats"
+    harmonized_dir = job_dir / "splats_harmonized"
+    
+    info = {
+        "job_id": job_id,
+        "has_splats": splats_dir.exists() and any(splats_dir.glob("*.ply")),
+        "has_harmonized": harmonized_dir.exists() and any(harmonized_dir.glob("*.ply")),
+        "fov": None,
+        "fov_overlap": None,
+    }
+    
+    # Try to get FOV from first PLY file
+    if info["has_splats"]:
+        try:
+            ply_files = list(splats_dir.glob("*.ply"))
+            if ply_files:
+                plydata = PlyData.read(ply_files[0])
+                intrinsic = plydata["intrinsic"]
+                image_size = plydata["image_size"]
+                
+                fx = float(intrinsic.data[0][0])
+                img_width = int(image_size.data[0][0])
+                
+                fov_rad = 2 * np.arctan(img_width / (2 * fx))
+                fov_deg = np.rad2deg(fov_rad)
+                
+                info["fov"] = round(fov_deg, 1)
+                info["fov_overlap"] = round(fov_deg - 90, 1)
+        except Exception as e:
+            LOGGER.warning(f"Could not read FOV from PLY: {e}")
+    
+    return info
+
+
 @app.post("/api/jobs/{job_id}/harmonize")
-async def harmonize_job_endpoint(job_id: str, fov: float = 110.0):
+async def harmonize_job_endpoint(job_id: str, fov: float = None):
     """Run depth harmonization on a job's splats.
     
     This corrects depth scale mismatches between cube faces using overlap correspondences.

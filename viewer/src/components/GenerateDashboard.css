@@ -961,6 +961,79 @@
   cursor: not-allowed;
 }
 
+.job-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.job-harmonize-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 212, 255, 0.15);
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  color: var(--accent-cyan);
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.job-harmonize-btn:hover:not(:disabled) {
+  background: rgba(0, 212, 255, 0.3);
+  border-color: var(--accent-cyan);
+}
+
+.job-harmonize-btn.harmonized {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: var(--accent-emerald);
+}
+
+.job-harmonize-btn.harmonized:hover:not(:disabled) {
+  background: rgba(16, 185, 129, 0.3);
+  border-color: var(--accent-emerald);
+}
+
+.job-harmonize-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fov-stat {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+}
+
+.fov-good {
+  color: var(--accent-emerald);
+  background: rgba(16, 185, 129, 0.15);
+}
+
+.fov-ok {
+  color: var(--accent-amber);
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.fov-bad {
+  color: var(--accent-coral);
+  background: rgba(249, 112, 102, 0.15);
+}
+
+.harmonized-stat {
+  color: var(--accent-cyan);
+  font-size: 0.6rem;
+  background: rgba(0, 212, 255, 0.15);
+  padding: 0.1rem 0.25rem;
+  border-radius: 3px;
+}
+
 .refresh-jobs-btn {
   margin-top: 0.75rem;
   width: 100%;
