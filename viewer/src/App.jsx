@@ -214,8 +214,9 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
   const [viewFov, setViewFov] = useState(60);  // 60° FOV default
   const [faceDistance, setFaceDistance] = useState(0);  // Distance to push faces outward from center
   const [gaussianDropRate, setGaussianDropRate] = useState(0);  // 0% drop by default
-  const [useHarmonized, setUseHarmonized] = useState(false);  // Depth harmonization toggle
+  const [splatSource, setSplatSource] = useState('original');  // 'original', 'harmonized', 'coherent'
   const [harmonizedAvailable, setHarmonizedAvailable] = useState(false);  // Track if harmonized files exist
+  const [coherentAvailable, setCoherentAvailable] = useState(false);  // Track if coherent files exist
   const [isHarmonizing, setIsHarmonizing] = useState(false);  // Harmonization in progress
   const controlsRef = useRef();
   const threeBridgeRef = useRef(null);
@@ -278,9 +279,11 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
   const expectedFaces = getFaceList(pipelineType);
   const faceRotations = getFaceRotations(pipelineType);
 
-  // Compute effective splat path based on harmonization toggle
-  const effectiveSplatPath = useHarmonized 
+  // Compute effective splat path based on splat source selection
+  const effectiveSplatPath = splatSource === 'harmonized' 
     ? splatBasePath.replace('/splats/', '/splats_harmonized/')
+    : splatSource === 'coherent'
+    ? splatBasePath.replace('/splats/', '/splats_coherent/')
     : splatBasePath;
 
   const checkFaces = async (basePath, faceList) => {
@@ -309,14 +312,24 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
     setLoading(false);
   };
 
-  // Check if harmonized files exist
-  const checkHarmonizedAvailable = async (basePath) => {
+  // Check if harmonized and coherent files exist
+  const checkAlternativeSplats = async (basePath) => {
+    // Check harmonized
     const harmonizedPath = basePath.replace('/splats/', '/splats_harmonized/');
     try {
       const response = await fetch(`${harmonizedPath}input_front.ply`, { method: 'HEAD' });
       setHarmonizedAvailable(response.ok);
     } catch {
       setHarmonizedAvailable(false);
+    }
+    
+    // Check coherent
+    const coherentPath = basePath.replace('/splats/', '/splats_coherent/');
+    try {
+      const response = await fetch(`${coherentPath}input_front.ply`, { method: 'HEAD' });
+      setCoherentAvailable(response.ok);
+    } catch {
+      setCoherentAvailable(false);
     }
   };
 
@@ -338,9 +351,9 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
       
       if (data.success) {
         setHarmonizedAvailable(true);
-        setUseHarmonized(true);
+        setSplatSource('harmonized');
         // Trigger refresh to load new files
-        checkFaces(effectiveSplatPath.replace('/splats/', '/splats_harmonized/'), expectedFaces);
+        checkFaces(splatBasePath.replace('/splats/', '/splats_harmonized/'), expectedFaces);
       } else {
         alert(`Harmonization failed: ${data.error}`);
       }
@@ -353,17 +366,17 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
 
   useEffect(() => {
     checkFaces(effectiveSplatPath, expectedFaces);
-    checkHarmonizedAvailable(splatBasePath);
-  }, [pipelineType, useHarmonized]);
+    checkAlternativeSplats(splatBasePath);
+  }, [pipelineType, splatSource]);
 
   // Re-check faces when refreshTrigger, splatBasePath, or pipelineType changes
   useEffect(() => {
     if (refreshTrigger > 0) {
       setLoading(true);
       checkFaces(effectiveSplatPath, expectedFaces);
-      checkHarmonizedAvailable(splatBasePath);
+      checkAlternativeSplats(splatBasePath);
     }
-  }, [refreshTrigger, splatBasePath, pipelineType, useHarmonized]);
+  }, [refreshTrigger, splatBasePath, pipelineType, splatSource]);
 
   const toggleFace = (face) => {
     setEnabledFaces(prev => ({ ...prev, [face]: !prev[face] }));
@@ -500,22 +513,25 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
               <p className="merge-hint">Sort all splats globally by distance from origin</p>
             </div>
 
-            <h2>Depth Harmonization</h2>
-            <div className="harmonize-controls">
-              <label className="face-toggle">
-                <input
-                  type="checkbox"
-                  checked={useHarmonized}
-                  onChange={(e) => setUseHarmonized(e.target.checked)}
-                  disabled={!harmonizedAvailable}
-                />
-                <span className="toggle-label">
-                  Use Harmonized
-                  {harmonizedAvailable ? ' ✓' : ' (not available)'}
-                </span>
-              </label>
-              <p className="harmonize-hint">
-                Corrects depth scale mismatches between cube faces
+            <h2>Splat Source</h2>
+            <div className="splat-source-controls">
+              <select 
+                value={splatSource} 
+                onChange={(e) => setSplatSource(e.target.value)}
+                className="splat-source-select"
+              >
+                <option value="original">Original</option>
+                <option value="harmonized" disabled={!harmonizedAvailable}>
+                  Harmonized {harmonizedAvailable ? '✓' : '(not available)'}
+                </option>
+                <option value="coherent" disabled={!coherentAvailable}>
+                  Coherent {coherentAvailable ? '✓' : '(not available)'}
+                </option>
+              </select>
+              <p className="splat-source-hint">
+                {splatSource === 'original' && 'Independent depth prediction per face'}
+                {splatSource === 'harmonized' && '✨ Post-process scale harmonization'}
+                {splatSource === 'coherent' && '✨ Prediction-time coherent depths'}
               </p>
               {!harmonizedAvailable && splatBasePath.includes('/generated/') && (
                 <button 
@@ -523,11 +539,8 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
                   onClick={runHarmonization}
                   disabled={isHarmonizing}
                 >
-                  {isHarmonizing ? 'Harmonizing...' : 'Run Harmonization'}
+                  {isHarmonizing ? 'Running...' : 'Run Harmonization'}
                 </button>
-              )}
-              {harmonizedAvailable && useHarmonized && (
-                <p className="harmonize-active">✨ Viewing harmonized splats</p>
               )}
             </div>
 
@@ -660,7 +673,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
           {useMergedSplats ? (
             // Single merged mesh with all faces - correct depth sorting
             <MergedGaussianSplats
-              key={`merged-${refreshTrigger}-${effectiveSplatPath}-${orientMode}-${pipelineType}-${faceDistance}-${cullMode}-drop${gaussianDropRate}-harm${useHarmonized}`}
+              key={`merged-${refreshTrigger}-${effectiveSplatPath}-${orientMode}-${pipelineType}-${faceDistance}-${cullMode}-drop${gaussianDropRate}-src${splatSource}`}
               basePath={effectiveSplatPath}
               enabledFaces={enabledFaces}
               splatScale={splatScale}

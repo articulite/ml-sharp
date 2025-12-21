@@ -484,55 +484,52 @@ body {
 }
 
 /* Depth Harmonization Controls */
-.harmonize-controls {
+.splat-source-controls {
   margin-top: 0.5rem;
   padding-top: 0.5rem;
   border-top: 1px solid var(--border-subtle);
 }
 
-.harmonize-controls .face-toggle {
-  margin-bottom: 0.25rem;
-}
-
-.harmonize-controls input[type="checkbox"] {
-  appearance: none;
-  width: 12px;
-  height: 12px;
-  border: 2px solid #ffaa00;
-  border-radius: 3px;
-  margin-right: 0.5rem;
+.splat-source-select {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.75rem;
   cursor: pointer;
-  position: relative;
   transition: all 0.2s ease;
 }
 
-.harmonize-controls input[type="checkbox"]:checked {
-  background: #ffaa00;
-  box-shadow: 0 0 8px rgba(255, 170, 0, 0.4);
+.splat-source-select:hover {
+  border-color: #ffaa00;
 }
 
-.harmonize-controls input[type="checkbox"]:checked::after {
-  content: '✓';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 8px;
-  color: #000;
-  font-weight: bold;
+.splat-source-select:focus {
+  outline: none;
+  border-color: #ffaa00;
+  box-shadow: 0 0 8px rgba(255, 170, 0, 0.3);
 }
 
-.harmonize-controls input[type="checkbox"]:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.splat-source-select option {
+  background: #1a1a2e;
+  color: var(--text-primary);
+  padding: 0.5rem;
 }
 
-.harmonize-hint {
+.splat-source-select option:disabled {
+  color: var(--text-muted);
+}
+
+.splat-source-hint {
   font-size: 0.65rem;
   color: var(--text-muted);
-  margin: 0.25rem 0;
+  margin: 0.5rem 0;
   padding-left: 0.4rem;
   line-height: 1.4;
+  min-height: 1.4em;
 }
 
 .harmonize-btn {
@@ -560,12 +557,6 @@ body {
   cursor: not-allowed;
 }
 
-.harmonize-active {
-  font-size: 0.65rem;
-  color: #ffaa00;
-  margin: 0.5rem 0 0 0;
-  padding-left: 0.4rem;
-}
 
 .splat-canvas {
   flex: 1;
