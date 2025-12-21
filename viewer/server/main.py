@@ -670,10 +670,12 @@ async def process_pipeline(
 @app.api_route("/generated/{job_id}/{filename:path}", methods=["GET", "HEAD"])
 async def serve_generated(job_id: str, filename: str):
     """Serve generated output files (handles both root and subdirectory files)."""
+    from fastapi.responses import JSONResponse
+    
     file_path = OUTPUT_DIR / job_id / filename
     if file_path.exists():
         return FileResponse(file_path)
-    return {"error": "File not found"}
+    return JSONResponse({"error": "File not found"}, status_code=404)
 
 
 @app.get("/api/jobs")
@@ -840,6 +842,48 @@ async def list_job_files(job_id: str):
             })
     
     return files
+
+
+@app.post("/api/jobs/{job_id}/harmonize")
+async def harmonize_job_endpoint(job_id: str, fov: float = 110.0):
+    """Run depth harmonization on a job's splats.
+    
+    This corrects depth scale mismatches between cube faces using overlap correspondences.
+    """
+    import shutil
+    import importlib.util
+    
+    job_dir = OUTPUT_DIR / job_id
+    if not job_dir.exists():
+        return {"error": "Job not found"}
+    
+    splats_dir = job_dir / "splats"
+    if not splats_dir.exists():
+        return {"error": "No splats directory found"}
+    
+    try:
+        # Import harmonization module from same directory
+        harmonize_script = Path(__file__).parent / "harmonize_job.py"
+        spec = importlib.util.spec_from_file_location("harmonize_job", harmonize_script)
+        harmonize_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(harmonize_module)
+        
+        LOGGER.info(f"Running harmonization for job {job_id}")
+        result = harmonize_module.harmonize_job(job_dir, fov=fov)
+        
+        # Copy to viewer
+        harmonize_module.copy_to_viewer(job_dir, SPLATS_DIR)
+        
+        return {
+            "success": True,
+            "scales": result["scales"],
+            "n_observations": result["n_observations"],
+            "output_dir": str(result["output_dir"]),
+            "message": "Harmonization complete. Refresh viewer to see results.",
+        }
+    except Exception as e:
+        LOGGER.exception(f"Harmonization error: {e}")
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
