@@ -218,6 +218,7 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
   const [harmonizedAvailable, setHarmonizedAvailable] = useState(false);  // Track if harmonized files exist
   const [coherentAvailable, setCoherentAvailable] = useState(false);  // Track if coherent files exist
   const [isHarmonizing, setIsHarmonizing] = useState(false);  // Harmonization in progress
+  const [isGeneratingCoherent, setIsGeneratingCoherent] = useState(false);  // Coherent generation in progress
   const controlsRef = useRef();
   const threeBridgeRef = useRef(null);
   
@@ -362,6 +363,37 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
     }
     
     setIsHarmonizing(false);
+  };
+
+  // Run coherent prediction on current job
+  const runCoherent = async () => {
+    const match = splatBasePath.match(/\/generated\/(job_[^/]+)\//);
+    if (!match) {
+      alert('Coherent prediction only works for generated jobs');
+      return;
+    }
+    
+    const jobId = match[1];
+    setIsGeneratingCoherent(true);
+    
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/coherent`, { method: 'POST' });
+      const data = await response.json();
+      
+      if (data.success) {
+        setCoherentAvailable(true);
+        setSplatSource('coherent');
+        // Trigger refresh to load new files
+        checkFaces(splatBasePath.replace('/splats/', '/splats_coherent/'), expectedFaces);
+        alert('Coherent prediction complete!');
+      } else {
+        alert(`Coherent prediction failed: ${data.error}`);
+      }
+    } catch (e) {
+      alert(`Coherent prediction error: ${e.message}`);
+    }
+    
+    setIsGeneratingCoherent(false);
   };
 
   useEffect(() => {
@@ -533,14 +565,27 @@ function SplatViewer({ refreshTrigger, splatBasePath = DEFAULT_SPLAT_PATH, pipel
                 {splatSource === 'harmonized' && '✨ Post-process scale harmonization'}
                 {splatSource === 'coherent' && '✨ Prediction-time coherent depths'}
               </p>
-              {!harmonizedAvailable && splatBasePath.includes('/generated/') && (
-                <button 
-                  className="harmonize-btn"
-                  onClick={runHarmonization}
-                  disabled={isHarmonizing}
-                >
-                  {isHarmonizing ? 'Running...' : 'Run Harmonization'}
-                </button>
+              {splatBasePath.includes('/generated/') && (
+                <div className="generation-buttons">
+                  {!harmonizedAvailable && (
+                    <button 
+                      className="harmonize-btn"
+                      onClick={runHarmonization}
+                      disabled={isHarmonizing || isGeneratingCoherent}
+                    >
+                      {isHarmonizing ? 'Running...' : 'Harmonize'}
+                    </button>
+                  )}
+                  {!coherentAvailable && (
+                    <button 
+                      className="coherent-btn"
+                      onClick={runCoherent}
+                      disabled={isHarmonizing || isGeneratingCoherent}
+                    >
+                      {isGeneratingCoherent ? 'Running...' : 'Gen Coherent'}
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 

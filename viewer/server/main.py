@@ -929,6 +929,53 @@ async def harmonize_job_endpoint(job_id: str, fov: float = None):
         return {"error": str(e)}
 
 
+@app.post("/api/jobs/{job_id}/coherent")
+async def coherent_job_endpoint(job_id: str):
+    """Run coherent prediction with boundary stitching on a job.
+    
+    This re-predicts Gaussians and stitches boundaries to align floor heights.
+    """
+    import subprocess
+    import sys
+    
+    job_dir = OUTPUT_DIR / job_id
+    if not job_dir.exists():
+        return {"error": "Job not found"}
+    
+    cubefaces_dir = job_dir / "cubefaces"
+    if not cubefaces_dir.exists():
+        return {"error": "No cubefaces directory found"}
+    
+    try:
+        # Run the coherent prediction test script
+        test_script = Path(__file__).parent.parent.parent / "tests" / "test_cubemap_coherent.py"
+        
+        LOGGER.info(f"Running coherent prediction for job {job_id}")
+        
+        result = subprocess.run(
+            [sys.executable, str(test_script), "--job", job_id, "--skip-compare"],
+            capture_output=True,
+            text=True,
+            cwd=str(Path(__file__).parent.parent.parent),
+            timeout=600,  # 10 minute timeout
+        )
+        
+        if result.returncode != 0:
+            LOGGER.error(f"Coherent prediction failed: {result.stderr}")
+            return {"error": f"Prediction failed: {result.stderr[-500:] if len(result.stderr) > 500 else result.stderr}"}
+        
+        return {
+            "success": True,
+            "message": "Coherent prediction complete. Select 'Coherent' in Splat Source dropdown.",
+            "output": result.stdout[-1000:] if len(result.stdout) > 1000 else result.stdout,
+        }
+    except subprocess.TimeoutExpired:
+        return {"error": "Prediction timed out (>10 minutes)"}
+    except Exception as e:
+        LOGGER.exception(f"Coherent prediction error: {e}")
+        return {"error": str(e)}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8765)
