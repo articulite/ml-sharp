@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 from einops import rearrange
@@ -10,6 +11,9 @@ from depth_anything_v2_metric.depth_anything_v2.dinov3_adpther import DINOv3Adap
 from argparse import Namespace
 from .models import register
 from depth_anything_utils import Resize, NormalizeImage, PrepareForNet
+
+# Get the DAP directory path for resolving relative paths
+_DAP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 class DAP(nn.Module):
     def __init__(self, args):
@@ -28,8 +32,8 @@ class DAP(nn.Module):
         'vitg': {'encoder': 'vitg', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
         }
         
-        # Load the pretrained model of depth anything
-        dinov3_repo_dir="./depth_anything_v2_metric/depth_anything_v2/dinov3"     # 你的本地 repo
+        # Load the pretrained model of depth anything - use absolute path based on DAP location
+        dinov3_repo_dir = os.path.join(_DAP_ROOT, "depth_anything_v2_metric", "depth_anything_v2", "dinov3")
         dinov3_arch="dinov3_vitl16"          
         dinov3_weight=""
 
