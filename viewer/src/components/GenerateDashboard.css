@@ -1052,6 +1052,45 @@
   color: var(--accent-cyan);
 }
 
+/* DAP Depth Guidance */
+.toggle-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toggle-option.disabled:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.toggle-unavailable {
+  font-size: 0.7rem;
+  color: var(--accent-amber);
+  font-weight: 400;
+}
+
+.dap-info-panel {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 212, 255, 0.1);
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+}
+
+.dap-badge {
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+
+.dap-range {
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+}
+
 /* Responsive */
 @media (max-width: 900px) {
   .dashboard-content {

@@ -266,11 +266,13 @@ function GenerateDashboard({ onSplatsGenerated }) {
     CUBE_FACES.reduce((acc, face) => ({ ...acc, [face]: true }), {})
   );
   const [generateSplats, setGenerateSplats] = useState(true);
+  const [useDapGuidance, setUseDapGuidance] = useState(true);
   
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState({ percent: 0, status: 'idle', message: '', duration: null });
   const [results, setResults] = useState(null);
   const [serverOnline, setServerOnline] = useState(false);
+  const [dapAvailable, setDapAvailable] = useState(false);
   const [loadedJobId, setLoadedJobId] = useState(null);
   const [jobHistoryKey, setJobHistoryKey] = useState(0);
   
@@ -278,14 +280,23 @@ function GenerateDashboard({ onSplatsGenerated }) {
   const fileInputRef = useRef(null);
   const startTimeRef = useRef(null);
 
-  // Check server health
+  // Check server health and DAP availability
   useEffect(() => {
     const checkHealth = async () => {
       try {
         const response = await fetch(`${API_BASE}/api/health`);
-        setServerOnline(response.ok);
+        if (response.ok) {
+          setServerOnline(true);
+          const data = await response.json();
+          // Check if DAP is available from health response
+          setDapAvailable(data.dap_available === true);
+        } else {
+          setServerOnline(false);
+          setDapAvailable(false);
+        }
       } catch {
         setServerOnline(false);
+        setDapAvailable(false);
       }
     };
     
@@ -445,6 +456,7 @@ function GenerateDashboard({ onSplatsGenerated }) {
         .map(([face]) => face)
         .join(',') || 'all');
       formData.append('generate_splats', generateSplats.toString());
+      formData.append('use_dap_guidance', useDapGuidance.toString());
       formData.append('job_id', jobId);
       
       try {
@@ -572,6 +584,14 @@ function GenerateDashboard({ onSplatsGenerated }) {
               {results.splats?.splats?.length > 0 && (
                 <>
                   <h3 className="splats-header">Generated Splats</h3>
+                  {results.dap_depth?.enabled && (
+                    <div className="dap-info-panel">
+                      <span className="dap-badge">🎯 DAP Guided</span>
+                      <span className="dap-range">
+                        Depth: {results.dap_depth.depth_range_m[0].toFixed(1)}m - {results.dap_depth.depth_range_m[1].toFixed(1)}m
+                      </span>
+                    </div>
+                  )}
                   <div className="splats-list">
                     {results.splats.splats.map((splat) => (
                       <div key={splat.name} className="splat-item">
@@ -684,6 +704,28 @@ function GenerateDashboard({ onSplatsGenerated }) {
                 Creates .ply files for each cube face using the Sharp model
               </p>
             </div>
+
+            {generateSplats && (
+              <div className="config-group">
+                <label className={`toggle-option ${!dapAvailable ? 'disabled' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={useDapGuidance && dapAvailable}
+                    onChange={(e) => setUseDapGuidance(e.target.checked)}
+                    disabled={!dapAvailable}
+                  />
+                  <span className="toggle-label">
+                    DAP Depth Guidance
+                    {!dapAvailable && <span className="toggle-unavailable"> (unavailable)</span>}
+                  </span>
+                </label>
+                <p className="toggle-hint">
+                  {dapAvailable 
+                    ? "Uses 360° panorama depth estimation for seamless depth across cube faces (0-100m metric depth)"
+                    : "DAP model not found. Place model.pth in checkpoints/dap/"}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Process Button */}

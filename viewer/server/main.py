@@ -24,6 +24,14 @@ from PIL import Image
 REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+# Import DAP depth module (optional feature)
+try:
+    from . import dap_depth
+    DAP_AVAILABLE = dap_depth.is_dap_available()
+except ImportError:
+    DAP_AVAILABLE = False
+    dap_depth = None
+
 from sharp.cli.equirect_to_cubefaces import (
     CUBE_FACES,
     compute_focal_length_px,
@@ -276,8 +284,21 @@ def _predict_single_image_sync(
     output_path: Path,
     splats_output_path: Path,
     job_id: str,
+    depth_guidance: np.ndarray | None = None,
 ) -> dict:
-    """Synchronous prediction for a single image (runs in thread pool)."""
+    """Synchronous prediction for a single image (runs in thread pool).
+    
+    Args:
+        model: The Sharp predictor model
+        device: Device to run inference on
+        image_path: Path to the input image
+        fov: Field of view in degrees
+        output_path: Directory to save the PLY file
+        splats_output_path: Additional directory to copy the PLY file
+        job_id: Job identifier for URL generation
+        depth_guidance: Optional metric depth map (H, W) to guide prediction.
+                       If provided, Sharp will align its depth to this.
+    """
     import torch
     import torch.nn.functional as F
     from sharp.utils.gaussians import save_ply, unproject_gaussians
@@ -297,7 +318,11 @@ def _predict_single_image_sync(
     # Compute focal length from FOV
     size = min(width, height)
     f_px = size / (2 * np.tan(np.deg2rad(fov) / 2))
-    LOGGER.info(f"Using FOV {fov}° -> focal length {f_px:.2f}px for {image_path.stem}")
+    
+    if depth_guidance is not None:
+        LOGGER.info(f"Using FOV {fov}° -> focal {f_px:.2f}px for {image_path.stem} (with DAP depth guidance)")
+    else:
+        LOGGER.info(f"Using FOV {fov}° -> focal length {f_px:.2f}px for {image_path.stem}")
     
     # Preprocess
     image_pt = torch.from_numpy(image.copy()).float().to(device).permute(2, 0, 1) / 255.0
@@ -310,9 +335,16 @@ def _predict_single_image_sync(
         align_corners=True,
     )
     
-    # Predict
+    # Prepare depth guidance if provided
+    depth_tensor = None
+    if depth_guidance is not None:
+        depth_tensor = dap_depth.prepare_depth_for_sharp(
+            depth_guidance, internal_shape, device
+        )
+    
+    # Predict (with optional depth guidance)
     with torch.no_grad():
-        gaussians_ndc = model(image_resized_pt, disparity_factor)
+        gaussians_ndc = model(image_resized_pt, disparity_factor, depth=depth_tensor)
     
     # Postprocess
     intrinsics = torch.tensor([
@@ -456,11 +488,22 @@ async def run_predict(
     faces_to_process: list[str],
     progress: PipelineProgress,
     device: str = "default",
+    depth_faces: dict[str, np.ndarray] | None = None,
 ) -> dict:
     """Run Gaussian splat prediction with progress updates.
     
     Uses cached model for fast inference, processes faces sequentially
     for better progress reporting and to avoid GPU memory pressure.
+    
+    Args:
+        cubefaces_path: Path to cube face images
+        output_path: Directory to save PLY files
+        splats_output_path: Additional directory to copy PLY files
+        fov: Field of view in degrees
+        faces_to_process: List of face names to process
+        progress: Progress tracker for WebSocket updates
+        device: Device for inference
+        depth_faces: Optional dict mapping face names to depth arrays (from DAP)
     """
     from sharp.utils import io as sharp_io
     
@@ -471,7 +514,9 @@ async def run_predict(
     model, device = get_or_load_model()
     
     progress.current_step += 1
-    progress.message = f"Model ready on {device.upper()}"
+    using_dap = depth_faces is not None and len(depth_faces) > 0
+    mode_str = f"Model ready on {device.upper()}" + (" with DAP depth guidance" if using_dap else "")
+    progress.message = mode_str
     await send_progress(progress.job_id, progress)
     
     # Find cube face images
@@ -500,7 +545,16 @@ async def run_predict(
     
     for i, image_path in enumerate(image_paths):
         face_name = image_path.stem.replace("input_", "")
-        progress.message = f"Generating splat for {face_name} ({i + 1}/{len(image_paths)})"
+        
+        # Get depth guidance for this face if available
+        depth_guidance = None
+        if depth_faces is not None:
+            depth_guidance = depth_faces.get(face_name)
+            if depth_guidance is not None:
+                LOGGER.info(f"Using DAP depth guidance for {face_name}")
+        
+        dap_indicator = " (DAP)" if depth_guidance is not None else ""
+        progress.message = f"Generating splat for {face_name}{dap_indicator} ({i + 1}/{len(image_paths)})"
         await send_progress(progress.job_id, progress)
         
         # Run single image prediction in thread pool
@@ -514,16 +568,18 @@ async def run_predict(
             output_path,
             splats_output_path,
             progress.job_id,
+            depth_guidance,
         )
         
         generated_splats.append(result)
         progress.current_step += 1
         await send_progress(progress.job_id, progress)
     
-    progress.message = f"Generated {len(generated_splats)} splat files"
+    suffix = " (with DAP depth guidance)" if using_dap else ""
+    progress.message = f"Generated {len(generated_splats)} splat files{suffix}"
     await send_progress(progress.job_id, progress)
     
-    return {"splats": generated_splats}
+    return {"splats": generated_splats, "used_dap_guidance": using_dap}
 
 
 @app.on_event("startup")
@@ -541,7 +597,10 @@ async def startup_event():
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "dap_available": DAP_AVAILABLE,
+    }
 
 
 @app.get("/api/model-status")
@@ -551,6 +610,17 @@ async def model_status():
         "loaded": _cached_model is not None,
         "device": _cached_device,
     }
+
+
+@app.get("/api/dap-status")
+async def dap_status():
+    """Check if DAP depth guidance is available."""
+    if dap_depth is None:
+        return {
+            "available": False,
+            "reason": "DAP module not loaded",
+        }
+    return dap_depth.get_dap_status()
 
 
 @app.websocket("/ws/{job_id}")
@@ -579,9 +649,21 @@ async def process_pipeline(
     output_size: int = Form(0),
     faces: str = Form("all"),
     generate_splats: bool = Form(True),
+    use_dap_guidance: bool = Form(True),
     job_id: str = Form(...),
 ):
-    """Process the full pipeline: equirect to cubefaces, then optionally splats."""
+    """Process the full pipeline: equirect to cubefaces, then optionally splats.
+    
+    Args:
+        file: Uploaded equirectangular panorama image
+        fov: Field of view for cube face extraction (default 110°)
+        output_size: Output cube face size in pixels (0 = auto)
+        faces: Comma-separated face names or "all"
+        generate_splats: Whether to generate Gaussian splats
+        use_dap_guidance: Whether to use DAP metric depth for guidance (default True).
+                         This provides globally consistent depth across faces.
+        job_id: Unique job identifier
+    """
     
     # Parse faces
     if faces.lower() == "all":
@@ -589,8 +671,18 @@ async def process_pipeline(
     else:
         faces_to_extract = [f.strip().lower() for f in faces.split(",")]
     
+    # Check if DAP guidance is available and requested
+    use_dap = use_dap_guidance and DAP_AVAILABLE and dap_depth is not None
+    if use_dap_guidance and not use_dap:
+        if not DAP_AVAILABLE:
+            LOGGER.warning("DAP guidance requested but model not available")
+        else:
+            LOGGER.warning("DAP guidance requested but module not loaded")
+    
     # Calculate total steps
     total_steps = 1 + len(faces_to_extract)  # load + faces
+    if use_dap and generate_splats:
+        total_steps += 1  # DAP inference step
     if generate_splats:
         total_steps += 1 + len(faces_to_extract)  # model load + predictions
     
@@ -615,9 +707,25 @@ async def process_pipeline(
             content = await file.read()
             f.write(content)
         
+        # Load the ERP image for processing
+        erp_img = Image.open(input_path)
+        erp_array = np.array(erp_img)
+        if erp_array.ndim == 2:
+            erp_array = np.stack([erp_array] * 3, axis=-1)
+        elif erp_array.shape[-1] == 4:
+            erp_array = erp_array[..., :3]
+        
+        h_eq, w_eq = erp_array.shape[:2]
+        
+        # Determine output size
+        size = output_size if output_size > 0 else None
+        if size is None:
+            size = h_eq // 2
+            size = (size // 16) * 16
+            size = max(size, 512)
+        
         # Run equirect to cubefaces
         cubefaces_output = job_output_dir / "cubefaces"
-        size = output_size if output_size > 0 else None
         
         cubefaces_result = await run_equirect_to_cubefaces(
             input_path=input_path,
@@ -630,6 +738,65 @@ async def process_pipeline(
         
         progress.results["cubefaces"] = cubefaces_result
         
+        # Run DAP depth estimation if enabled
+        depth_faces = None
+        if use_dap and generate_splats:
+            progress.current_step += 1
+            progress.message = "Running DAP depth estimation on panorama..."
+            await send_progress(job_id, progress)
+            
+            try:
+                # Run DAP inference in thread pool (CPU-bound)
+                loop = asyncio.get_event_loop()
+                
+                # Get device (use same as Sharp model if loaded)
+                dap_device = _cached_device if _cached_device else "cpu"
+                
+                erp_depth = await loop.run_in_executor(
+                    INFERENCE_POOL,
+                    dap_depth.estimate_erp_depth,
+                    erp_array,
+                    dap_device,
+                )
+                
+                # Save RAW METRIC DEPTH as .npy (full float32 precision, 0-100m range)
+                # This is NOT a visualization - it's the actual depth data in meters
+                depth_npy_path = job_output_dir / "erp_depth.npy"
+                np.save(depth_npy_path, erp_depth)
+                LOGGER.info(f"Saved raw metric depth to {depth_npy_path} (range: {erp_depth.min():.2f}m - {erp_depth.max():.2f}m)")
+                
+                # Extract depth cube faces
+                progress.message = "Extracting depth cube faces..."
+                await send_progress(job_id, progress)
+                
+                # Build faces dict with (yaw, pitch) for each face
+                faces_dict = {name: CUBE_FACES[name] for name in faces_to_extract}
+                
+                depth_faces = await loop.run_in_executor(
+                    INFERENCE_POOL,
+                    dap_depth.extract_depth_cubefaces,
+                    erp_depth,
+                    fov,
+                    size,
+                    faces_dict,
+                )
+                
+                progress.results["dap_depth"] = {
+                    "enabled": True,
+                    "depth_range_m": [float(erp_depth.min()), float(erp_depth.max())],
+                    "faces_extracted": list(depth_faces.keys()),
+                }
+                
+                LOGGER.info(f"DAP depth extracted for {len(depth_faces)} faces")
+                
+            except Exception as e:
+                LOGGER.exception(f"DAP depth estimation failed: {e}")
+                progress.results["dap_depth"] = {
+                    "enabled": False,
+                    "error": str(e),
+                }
+                depth_faces = None  # Fall back to no depth guidance
+        
         # Run splat prediction if requested
         if generate_splats:
             splats_output = job_output_dir / "splats"
@@ -641,12 +808,14 @@ async def process_pipeline(
                 fov=fov,
                 faces_to_process=faces_to_extract,
                 progress=progress,
+                depth_faces=depth_faces,
             )
             
             progress.results["splats"] = splats_result
         
         progress.status = "completed"
-        progress.message = "Pipeline completed successfully!"
+        dap_suffix = " (with DAP depth guidance)" if depth_faces else ""
+        progress.message = f"Pipeline completed successfully!{dap_suffix}"
         progress.current_step = progress.total_steps
         await send_progress(job_id, progress)
         
