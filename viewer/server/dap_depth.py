@@ -158,6 +158,11 @@ def estimate_erp_depth(
         f"mean={depth_meters.mean():.3f}m, dtype={depth_meters.dtype}"
     )
     
+    # Flip ERP depth vertically to match the coordinate convention expected by erp_depth_to_perspective
+    # DAP outputs Y=0 at top, but our spherical projection math expects Y=0 at bottom
+    # This single flip at the source correctly propagates to all 6 cube faces
+    depth_meters = np.flipud(depth_meters)
+    
     return depth_meters.astype(np.float32)
 
 

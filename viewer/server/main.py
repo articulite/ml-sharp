@@ -343,8 +343,15 @@ def _predict_single_image_sync(
         )
     
     # Predict (with optional depth guidance)
+    # When DAP depth is provided, use force_depth=True to directly use the metric depth
+    # instead of relying on Sharp's learned alignment (which is designed for small corrections)
     with torch.no_grad():
-        gaussians_ndc = model(image_resized_pt, disparity_factor, depth=depth_tensor)
+        gaussians_ndc = model(
+            image_resized_pt,
+            disparity_factor,
+            depth=depth_tensor,
+            force_depth=(depth_tensor is not None),
+        )
     
     # Postprocess
     intrinsics = torch.tensor([

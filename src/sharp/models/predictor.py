@@ -105,6 +105,7 @@ class RGBGaussianPredictor(nn.Module):
         image: torch.Tensor,
         disparity_factor: torch.Tensor,
         depth: torch.Tensor | None = None,
+        force_depth: bool = False,
     ) -> Gaussians3D:
         """Predict 3D Gaussians.
 
@@ -112,6 +113,10 @@ class RGBGaussianPredictor(nn.Module):
             image: The image to process.
             disparity_factor: Factor to convert depth to disparities.
             depth: Ground truth depth to align predicted depth to.
+            force_depth: If True and depth is provided, directly use the provided
+                depth instead of using the learned alignment. This is useful when
+                you have accurate external depth (e.g., from DAP panorama depth)
+                and want to bypass the learned scale-map alignment.
 
         Returns:
             The predicted 3D Gaussians.
@@ -122,6 +127,12 @@ class RGBGaussianPredictor(nn.Module):
         map to the network to align the predicted depth to. During inference, it is
         recommended to use depth_gt=None and use monodepth_disparity output from the
         model instead to compute depth.
+        
+        When force_depth=True:
+        - The provided depth is used directly, bypassing learned alignment
+        - This is useful for panorama-to-cubemap workflows where external metric
+          depth (e.g., from DAP) should be trusted over Sharp's monocular estimate
+        - The model's own monodepth is still computed for feature extraction
         """
         # Estimate depth and align to ground truth (if available).
         monodepth_output = self.monodepth_model(image)
@@ -168,16 +179,27 @@ class RGBGaussianPredictor(nn.Module):
         #            gaussians          # The final Gaussians are metric again.
         #
 
-        # The logic to decide whether to align monodepth to the ground truth is wrapped
-        # in a submodule 'DepthAlignement' to facilitate the symbolic tracing of the
-        # predictor. This way, the depth alignment submodule containing the conditional
-        # logic can be excluded during the tracing and the graph of the predictors is
-        # static.
-        monodepth, _ = self.depth_alignment(
-            monodepth,
-            depth,
-            monodepth_output.decoder_features,
-        )
+        # Handle depth: either use forced external depth or learned alignment
+        if force_depth and depth is not None:
+            # Directly use external depth, bypassing learned alignment
+            # This is for cases where we have accurate metric depth (e.g., from DAP)
+            # that we want to use instead of Sharp's monocular depth estimate
+            LOGGER.debug("Using force_depth mode: directly using provided depth")
+            # Expand depth to match monodepth shape if needed (handle num_layers)
+            if depth.shape[1] == 1 and monodepth.shape[1] > 1:
+                depth = depth.expand(-1, monodepth.shape[1], -1, -1)
+            monodepth = depth
+        else:
+            # The logic to decide whether to align monodepth to the ground truth is wrapped
+            # in a submodule 'DepthAlignement' to facilitate the symbolic tracing of the
+            # predictor. This way, the depth alignment submodule containing the conditional
+            # logic can be excluded during the tracing and the graph of the predictors is
+            # static.
+            monodepth, _ = self.depth_alignment(
+                monodepth,
+                depth,
+                monodepth_output.decoder_features,
+            )
 
         init_output = self.init_model(image, monodepth)
         image_features = self.feature_model(
