@@ -146,7 +146,12 @@ def estimate_erp_depth(
     with torch.no_grad():
         # DAP's infer_image handles preprocessing internally
         # Returns normalized depth in range [0, 1] where 1.0 = max_depth (100m)
-        depth_normalized = model.infer_image(erp_bgr, input_size=518)
+        # Use higher resolution for better depth detail, capped to avoid OOM
+        MAX_DAP_INPUT_SIZE = 1540  # Balance between quality and memory usage
+        native_short_side = min(erp_image.shape[0], erp_image.shape[1])
+        input_size = min(native_short_side, MAX_DAP_INPUT_SIZE)
+        LOGGER.info(f"Using DAP resolution: input_size={input_size} (native short side: {native_short_side})")
+        depth_normalized = model.infer_image(erp_bgr, input_size=input_size)
     
     # CRITICAL: Scale to actual meters using full range (0-100m)
     # This is RAW METRIC DEPTH - not compressed for visualization!
