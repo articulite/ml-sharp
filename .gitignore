@@ -169,7 +169,11 @@ cython_debug/
 data/cubefaces/
 data/splats/
 data/input.jpg
+data/input_depth.*
 *.ply
+
+# Model checkpoints (large files)
+checkpoints/
 
 # Keep teaser.jpg (it's in the repo for README)
 !data/teaser.jpg
